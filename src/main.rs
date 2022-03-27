@@ -1,4 +1,4 @@
-use std::{env::{self, Args}, process::exit};
+use std::{env::{self, Args}, process::exit, io::{self, BufRead}};
 use regex::{Regex, RegexBuilder};
 
 struct Config {
@@ -60,10 +60,6 @@ impl Config {
             error("No query specified");
         }
 
-        if filenames.len() == 0 {
-            error("No files specified");
-        }
-
         if is_string_search {
             Config {
                 query: None,
@@ -115,7 +111,35 @@ fn search(query: &Option<Regex>,
         let multiple_files = filenames.len() > 1;
         let mut results = Vec::new();
 
+        let mut stdin = io::stdin().lock();
+
+        let mut matches: u32 = 0;
+        let mut read_stdin = false;
+
         if let Some(string_search) = string_search {
+            let mut line = String::new();
+            let mut i: usize = 0;
+            while let Ok(bytes_read) = stdin.read_line(&mut line) {
+                if bytes_read == 0 {
+                    break;
+                }
+                read_stdin = true;
+                if line.contains(&string_search) ^ invert {
+                    results.push(format_line(i, &line, show_lines, "stdin", multiple_files));
+                    matches += 1;
+                }
+
+                if max > 0 && matches >= max {
+                    break;
+                }
+                i += 1;
+                line.clear();
+            }
+
+            if !read_stdin && filenames.len() == 0 {
+                error("No files specified");
+            }
+
             for filename in filenames {
                 let mut matches: u32 = 0;
                 let content = read_file(&filename);
@@ -133,6 +157,30 @@ fn search(query: &Option<Regex>,
 
             }
         } else if let Some(query) = query {
+            let mut line = String::new();
+            let mut i: usize = 0;
+            while let Ok(bytes_read) = stdin.read_line(&mut line) {
+                if bytes_read == 0 {
+                    break;
+                }
+                line = line.trim_end().to_string();
+                read_stdin = true;
+                if query.is_match(&line) ^ invert {
+                    results.push(format_line(i, &line, show_lines, "stdin", multiple_files));
+                    matches += 1;
+                }
+
+                if max > 0 && matches >= max {
+                    break;
+                }
+                i += 1;
+                line.clear();
+            }
+
+            if !read_stdin && filenames.len() == 0 {
+                error("No files specified");
+            }
+
             for filename in filenames {
                 let mut matches: u32 = 0;
                 let content = read_file(&filename);

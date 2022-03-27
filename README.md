@@ -30,6 +30,7 @@ Options:
 
 ### Features
 + Regex support
++ Reads from stdin so users can pipe programs' outputs into it (e.g. `seq 10000 | rust_grep '^\\d{1,3}$'`)
 + Customizable using command flags
     + Ignore casing with the -i flag
     + Show the line in which the match is found with the -n flag

@@ -75,7 +75,7 @@ impl Config {
             }
         } else {
             let re = RegexBuilder::new(&query)
-                .case_insensitive(case_sensitive)
+                .case_insensitive(!case_sensitive)
                 .build();
 
             if re.is_err() {

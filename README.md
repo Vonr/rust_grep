@@ -23,8 +23,9 @@ Options:
 -i          Ignore case distinctions in PATTERN
 -n          Print line number with output lines
 -v          Invert match: select non-matching lines
+-F          String searching, disables regex
 -m <NUM>    Stop after NUM matches
--h          Print this help and exit```
+-h          Print this help and exit
 ```
 
 ### Features

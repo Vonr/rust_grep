@@ -95,7 +95,7 @@ impl Config {
 }
 
 fn print_help() {
-    println!("Usage: rust_grep [OPTION]... PATTERN [FILES]...\nSearch for PATTERN in FILES.\nExample:\n    rust_grep -i 'hello world' file.txt\n\nOptions:\n-i          Ignore case distinctions in PATTERN\n-n          Print line number with output lines\n-v          Invert match: select non-matching lines\n-m <NUM>    Stop after NUM matches\n-h          Print this help and exit")
+    println!("Usage: rust_grep [OPTION]... PATTERN [FILES]...\nSearch for PATTERN in FILES.\nExample:\n    rust_grep -i 'hello world' file1.txt file2.txt\n\nOptions:\n-i          Ignore case distinctions in PATTERN\n-n          Print line number with output lines\n-v          Invert match: select non-matching lines\n-m <NUM>    Stop after NUM matches\n-h          Print this help and exit")
 }
 
 fn main() {

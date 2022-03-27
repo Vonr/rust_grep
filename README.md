@@ -17,7 +17,7 @@ This project is also unlikely to receive any updates as it is already "finished"
 Usage: rust_grep [OPTION]... PATTERN [FILES]...
 Search for PATTERN in FILES.
 Example:
-    rust_grep -i 'hello world' file.txt
+    rust_grep -i 'hello world' file1.txt file2.txt
 
 Options:
 -i          Ignore case distinctions in PATTERN

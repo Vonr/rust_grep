@@ -97,111 +97,109 @@ fn print_help() {
 fn main() {
     let cfg = Config::new(env::args());
 
-    print_matches(search(&cfg.query, cfg.filenames, cfg.show_lines, cfg.max, cfg.invert, cfg.string_search));
+    grep(&cfg.query, cfg.filenames, cfg.show_lines, cfg.max, cfg.invert, cfg.string_search);
 }
 
-fn search(query: &Option<Regex>,
+fn grep(query: &Option<Regex>,
           filenames: Vec<String>,
           show_lines: bool,
           max: u32,
           invert: bool,
           string_search: Option<String>)
-    -> Vec<String> {
+{
 
-        let multiple_files = filenames.len() > 1;
-        let mut results = Vec::new();
+    let multiple_files = filenames.len() > 1;
 
-        let mut stdin = io::stdin().lock();
+    let mut stdin = io::stdin().lock();
 
-        let mut matches: u32 = 0;
-        let mut read_stdin = false;
+    let mut matches: u32 = 0;
+    let mut read_stdin = false;
 
-        if let Some(string_search) = string_search {
-            let mut line = String::new();
-            let mut i: usize = 0;
-            while let Ok(bytes_read) = stdin.read_line(&mut line) {
-                if bytes_read == 0 {
-                    break;
-                }
-                read_stdin = true;
-                if line.contains(&string_search) ^ invert {
-                    results.push(format_line(i, &line, show_lines, "stdin", multiple_files));
-                    matches += 1;
-                }
-
-                if max > 0 && matches >= max {
-                    break;
-                }
-                i += 1;
-                line.clear();
+    if let Some(string_search) = string_search {
+        let mut line = String::new();
+        let mut i: usize = 0;
+        while let Ok(bytes_read) = stdin.read_line(&mut line) {
+            if bytes_read == 0 {
+                break;
+            }
+            read_stdin = true;
+            line = line.trim_end().to_string();
+            if line.contains(&string_search) ^ invert {
+                println!("{}", format_line(i, &line, show_lines, "stdin", multiple_files));
+                matches += 1;
             }
 
-            if !read_stdin && filenames.len() == 0 {
-                error("No files specified");
+            if max > 0 && matches >= max {
+                break;
             }
-
-            for filename in filenames {
-                let mut matches: u32 = 0;
-                let content = read_file(&filename);
-
-                for (i, line) in content.lines().enumerate() {
-                    if line.contains(&string_search) ^ invert {
-                        results.push(format_line(i, &line, show_lines, &filename, multiple_files));
-                        matches += 1;
-                    }
-
-                    if max > 0 && matches >= max {
-                        break;
-                    }
-                }
-
-            }
-        } else if let Some(query) = query {
-            let mut line = String::new();
-            let mut i: usize = 0;
-            while let Ok(bytes_read) = stdin.read_line(&mut line) {
-                if bytes_read == 0 {
-                    break;
-                }
-                line = line.trim_end().to_string();
-                read_stdin = true;
-                if query.is_match(&line) ^ invert {
-                    results.push(format_line(i, &line, show_lines, "stdin", multiple_files));
-                    matches += 1;
-                }
-
-                if max > 0 && matches >= max {
-                    break;
-                }
-                i += 1;
-                line.clear();
-            }
-
-            if !read_stdin && filenames.len() == 0 {
-                error("No files specified");
-            }
-
-            for filename in filenames {
-                let mut matches: u32 = 0;
-                let content = read_file(&filename);
-
-                for (i, line) in content.lines().enumerate() {
-                    if query.is_match(line) ^ invert {
-                        results.push(format_line(i, &line, show_lines, &filename, multiple_files));
-                        matches += 1;
-                    }
-
-                    if max > 0 && matches >= max {
-                        break;
-                    }
-                }
-            }
-        } else {
-            error("Invalid query provided");
+            i += 1;
+            line.clear();
         }
 
-        results
+        if !read_stdin && filenames.len() == 0 {
+            error("No files specified");
+        }
+
+        for filename in filenames.into_iter() {
+            let mut matches: u32 = 0;
+            let content = read_file(&filename);
+
+            for (i, line) in content.lines().enumerate().into_iter() {
+                if line.contains(&string_search) ^ invert {
+                    println!("{}", format_line(i, &line, show_lines, "stdin", multiple_files));
+                    matches += 1;
+                }
+
+                if max > 0 && matches >= max {
+                    break;
+                }
+            }
+
+        }
+    } else if let Some(query) = query {
+        let mut line = String::new();
+        let mut i: usize = 0;
+        while let Ok(bytes_read) = stdin.read_line(&mut line) {
+            if bytes_read == 0 {
+                break;
+            }
+            read_stdin = true;
+            line = line.trim_end().to_string();
+            if query.is_match(&line) ^ invert {
+                println!("{}", format_line(i, &line, show_lines, "stdin", multiple_files));
+                matches += 1;
+            }
+
+            if max > 0 && matches >= max {
+                break;
+            }
+            i += 1;
+            line.clear();
+        }
+
+        if !read_stdin && filenames.len() == 0 {
+            error("No files specified");
+        }
+
+        for filename in filenames.into_iter() {
+            let mut matches: u32 = 0;
+            let content = read_file(&filename);
+
+            for (i, line) in content.lines().enumerate().into_iter() {
+                if query.is_match(line) ^ invert {
+                    println!("{}", format_line(i, &line, show_lines, &filename, multiple_files));
+                    matches += 1;
+                }
+
+                if max > 0 && matches >= max {
+                    break;
+                }
+            }
+        }
+    } else {
+        error("Invalid query provided");
     }
+}
 
 fn format_line(index: usize, line: &str, show_lines: bool, filename: &str, multiple_files: bool) -> String {
     if multiple_files {
@@ -227,12 +225,6 @@ fn read_file(filename: &str) -> String {
     }
 
     content.unwrap()
-}
-
-fn print_matches(matches: Vec<String>) {
-    for line in matches {
-        println!("{}", line);
-    }
 }
 
 fn error(message: &str) {

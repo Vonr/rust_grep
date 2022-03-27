@@ -40,9 +40,7 @@ impl Config {
                             exit(0);
                         }
                         _ => {
-                            eprintln!("Invalid flag: {}", c);
-                            print_help();
-                            exit(1);
+                            error(&format!("Invalid flag: {}", c));
                         }
                     }
                 }
@@ -59,15 +57,11 @@ impl Config {
         }
 
         if query.is_empty() {
-            eprintln!("No query specified");
-            print_help();
-            exit(1);
+            error("No query specified");
         }
 
         if filenames.len() == 0 {
-            eprintln!("No files specified");
-            print_help();
-            exit(1);
+            error("No files specified");
         }
 
         if is_string_search {
@@ -85,9 +79,7 @@ impl Config {
                 .build();
 
             if re.is_err() {
-                eprintln!("Invalid regex {}: {}", query, re.err().unwrap());
-                print_help();
-                exit(1);
+                error(&format!("Invalid regex {}: {}", query, re.as_ref().err().unwrap()));
             }
 
             Config {
@@ -157,9 +149,7 @@ fn search(query: &Option<Regex>,
                 }
             }
         } else {
-            eprintln!("Invalid query provided");
-            print_help();
-            exit(1);
+            error("Invalid query provided");
         }
 
         results
@@ -184,9 +174,8 @@ fn format_line(index: usize, line: &str, show_lines: bool, filename: &str, multi
 fn read_file(filename: &str) -> String {
     let content = std::fs::read_to_string(filename);
     if content.is_err() {
-        eprintln!("Error reading {}: {}", filename, content.err().unwrap());
-        print_help();
-        exit(1);
+        error(&format!("Error reading {}: {}", filename, content.err().unwrap()));
+        return String::new();
     }
 
     content.unwrap()
@@ -196,4 +185,10 @@ fn print_matches(matches: Vec<String>) {
     for line in matches {
         println!("{}", line);
     }
+}
+
+fn error(message: &str) {
+    eprintln!("{}", message);
+    print_help();
+    exit(1);
 }

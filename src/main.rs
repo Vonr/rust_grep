@@ -129,8 +129,8 @@ fn grep(cfg: Config) {
     let stdout = std::io::stdout().lock();
     let mut writer = BufWriter::new(stdout);
 
+    let mut patterns = Vec::new();
     if cfg.is_string_search {
-        let mut patterns = Vec::new();
         if cfg.is_pattern_file {
             patterns = read_patterns_file_string(&query);
         } else {
@@ -209,9 +209,7 @@ fn grep(cfg: Config) {
                         break;
                     }
                 }
-                reader
-                    .seek(io::SeekFrom::Start(0))
-                    .expect("Could not seek to start");
+                reader.seek(io::SeekFrom::Start(0)).unwrap();
             }
         }
     } else {
@@ -223,11 +221,11 @@ fn grep(cfg: Config) {
                 .case_insensitive(!cfg.case_sensitive)
                 .build();
 
-            if re.is_err() {
+            if let Ok(re) = re {
+                patterns.push(re);
+            } else {
                 error(&format!("Error parsing regex: {}", re.err().unwrap()));
-                return;
             }
-            patterns.push(re.unwrap());
         }
 
         if !istty {
@@ -289,9 +287,7 @@ fn grep(cfg: Config) {
                         }
                     }
                 }
-                reader
-                    .seek(io::SeekFrom::Start(0))
-                    .expect("Could not seek to start");
+                reader.seek(io::SeekFrom::Start(0)).unwrap();
             }
         }
     }
@@ -324,21 +320,36 @@ fn print_match(
 
 fn read_file(filename: &str) -> BufReader<File> {
     let file = File::open(filename);
-    if file.is_err() {
-        error(&format!(
-            "Error reading {}: {}",
-            filename,
-            file.err().unwrap()
-        ));
-        exit(1) // Required because of borrow checker
+    if let Ok(file) = file {
+        BufReader::new(file)
+    } else {
+        error(&format!("Error reading {}", filename));
+        exit(1); // Required due to borrow checker
     }
-
-    BufReader::new(file.unwrap())
 }
 
 fn read_patterns_file_regex(filename: &str, case_sensitive: bool) -> Vec<Regex> {
     let content = std::fs::read_to_string(filename);
-    if content.is_err() {
+    if let Ok(content) = content {
+        let mut patterns = Vec::new();
+        for (i, line) in content.lines().enumerate() {
+            let re = RegexBuilder::new(line)
+                .case_insensitive(!case_sensitive)
+                .build();
+
+            if let Ok(re) = re {
+                patterns.push(re)
+            } else {
+                error(&format!(
+                    "Error parsing regex: {} in {}:{}",
+                    re.err().unwrap(),
+                    &filename,
+                    i
+                ));
+            }
+        }
+        patterns
+    } else {
         error(&format!(
             "Error reading {}: {}",
             filename,
@@ -346,45 +357,24 @@ fn read_patterns_file_regex(filename: &str, case_sensitive: bool) -> Vec<Regex> 
         ));
         return Vec::new();
     }
-
-    let mut patterns = Vec::new();
-    for (i, line) in content.unwrap().lines().enumerate() {
-        let re = RegexBuilder::new(line)
-            .case_insensitive(!case_sensitive)
-            .build();
-
-        if re.is_err() {
-            error(&format!(
-                "Error parsing regex: {} in {}:{}",
-                re.err().unwrap(),
-                &filename,
-                i
-            ));
-            return Vec::new();
-        }
-
-        patterns.push(re.unwrap())
-    }
-
-    patterns
 }
 
 fn read_patterns_file_string(filename: &str) -> Vec<String> {
     let content = std::fs::read_to_string(filename);
-    if content.is_err() {
+    let mut out = Vec::new();
+
+    if let Ok(content) = content {
+        for line in content.lines() {
+            out.push(line.to_owned());
+        }
+    } else {
         error(&format!(
             "Error reading {}: {}",
             filename,
             content.err().unwrap()
         ));
-        return Vec::new();
     }
-
-    content
-        .unwrap()
-        .lines()
-        .map(|line| line.trim().to_owned())
-        .collect()
+    out
 }
 
 fn error(message: &str) {

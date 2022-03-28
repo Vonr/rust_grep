@@ -1,6 +1,6 @@
 use regex::{Regex, RegexBuilder};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     env::{self, Args},
     fs::File,
     io::{self, BufRead, BufReader, BufWriter, Seek, StdoutLock, Write},

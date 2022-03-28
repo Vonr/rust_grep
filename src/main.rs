@@ -144,29 +144,29 @@ fn grep(cfg: Config) {
                     for pattern in &patterns {
                         if (match_on == MatchOn::Anywhere && line.contains(pattern) ^ invert)
                             || (match_on == MatchOn::Line && (line == pattern.to_owned()) ^ invert)
-                                || (match_on == MatchOn::Word
-                                    && line
+                            || (match_on == MatchOn::Word
+                                && line
                                     .split_whitespace()
                                     .any(|word| (word == pattern) ^ invert))
-                                {
-                                    print_match(
-                                        &mut writer,
-                                        i,
-                                        &line,
-                                        cfg.show_lines,
-                                        "stdin",
-                                        multiple_files,
-                                        );
-                                    matches += 1;
-                                }
+                        {
+                            print_match(
+                                &mut writer,
+                                i,
+                                &line,
+                                cfg.show_lines,
+                                "stdin",
+                                multiple_files,
+                            );
+                            matches += 1;
+                        }
 
                         if max > 0 && matches >= max {
                             break;
                         }
                     }
                 } else {
-                        error("Could not read line");
-                        break;
+                    error("Could not read line");
+                    break;
                 }
             }
             return;

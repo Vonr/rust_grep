@@ -14,7 +14,7 @@ This project is also unlikely to receive any updates as it is already "finished"
 
 ### Usage
 ```
-Usage: rust_grep [OPTION]... PATTERN [FILES]...
+Usage: rust_grep [OPTION]... QUERY [FILES]...
 Search for PATTERN in FILES.
 Example:
     rust_grep -i 'hello world' file1.txt file2.txt
@@ -24,6 +24,7 @@ Options:
 -n          Print line number with output lines
 -v          Invert match: select non-matching lines
 -F          String searching, disables regex
+-f          Read patterns from file specified in QUERY
 -m <NUM>    Stop after NUM matches
 -h          Print this help and exit
 ```

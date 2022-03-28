@@ -25,6 +25,8 @@ Options:
 -v          Invert match: select non-matching lines
 -F          String searching, disables regex
 -f          Read patterns from file specified in QUERY
+-x          Only match whole lines, only works with -F
+-w          Only match whole words, only works with -F
 -m <NUM>    Stop after NUM matches
 -h          Print this help and exit
 ```

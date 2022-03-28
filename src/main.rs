@@ -10,6 +10,14 @@ struct Config {
     pub case_sensitive: bool,
     pub is_string_search: bool,
     pub is_pattern_file: bool,
+    pub match_on: MatchOn,
+}
+
+#[derive(PartialEq)]
+enum MatchOn {
+    Anywhere,
+    Line,
+    Word,
 }
 
 impl Config {
@@ -22,6 +30,7 @@ impl Config {
         let mut case_sensitive = true;
         let mut is_string_search = false;
         let mut is_pattern_file = false;
+        let mut match_on = MatchOn::Anywhere;
 
         for arg in args.skip(1) {
             if arg.starts_with("-") {
@@ -37,6 +46,8 @@ impl Config {
                         'v' => invert = true,
                         'F' => is_string_search = true,
                         'f' => is_pattern_file = true,
+                        'w' => match_on = MatchOn::Word,
+                        'x' => match_on = MatchOn::Line,
                         'h' => {
                             print_help();
                             exit(0);
@@ -68,6 +79,7 @@ impl Config {
             case_sensitive,
             is_string_search,
             is_pattern_file,
+            match_on,
         }
     }
 }
@@ -84,6 +96,8 @@ fn print_help() {
                 "-v          Invert match: select non-matching lines\n",
                 "-F          String searching, disables regex\n",
                 "-f          Read patterns from file specified in QUERY\n",
+                "-x          Only match whole lines, only works with -F\n",
+                "-w          Only match whole words, only works with -F\n",
                 "-m <NUM>    Stop after NUM matches\n",
                 "-h          Print this help and exit"
                )
@@ -105,6 +119,7 @@ fn grep(cfg: Config) {
     let invert = cfg.invert;
     let show_lines = cfg.show_lines;
     let max = cfg.max;
+    let match_on = cfg.match_on;
 
     let istty = atty::is(atty::Stream::Stdin);
 
@@ -126,7 +141,10 @@ fn grep(cfg: Config) {
                         break;
                     }
                     line = line.trim_end().to_string();
-                    if line.contains(pattern) ^ invert {
+                    if (match_on == MatchOn::Anywhere && line.contains(pattern) ^ invert)
+                        || (match_on == MatchOn::Line && (line == pattern.to_string()) ^ invert)
+                        || (match_on == MatchOn::Word && line.split_whitespace().any(|word| (word == pattern) ^ invert))
+                    {
                         println!("{}", format_line(i, &line, cfg.show_lines, "stdin", multiple_files));
                         matches += 1;
                     }
@@ -152,7 +170,11 @@ fn grep(cfg: Config) {
                 let content = read_file(&filename);
 
                 for (i, line) in content.lines().enumerate() {
-                    if !printed.contains(&i) && line.contains(&pattern) ^ cfg.invert {
+                    if !printed.contains(&i)
+                        && (match_on == MatchOn::Anywhere && line.contains(&pattern) ^ cfg.invert)
+                            || (match_on == MatchOn::Line && (line == pattern) ^ cfg.invert)
+                            || (match_on == MatchOn::Word && line.split_whitespace().any(|word| (word == &pattern) ^ cfg.invert))
+                    {
                         println!("{}", format_line(i, line, cfg.show_lines, "stdin", multiple_files));
                         printed.push(i);
                         matches += 1;
@@ -217,7 +239,6 @@ fn grep(cfg: Config) {
                 let content = read_file(&filename);
 
                 for (i, line) in content.lines().enumerate() {
-                    println!("{}:{}", i, line);
                     if !printed.contains(&i) && pattern.is_match(line) ^ invert {
                         println!("{}", format_line(i, line, show_lines, &filename, multiple_files));
                         printed.push(i);

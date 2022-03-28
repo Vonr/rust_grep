@@ -1,5 +1,9 @@
-use std::{env::{self, Args}, process::exit, io::{self, BufRead}};
 use regex::{Regex, RegexBuilder};
+use std::{
+    env::{self, Args},
+    io::{self, BufRead},
+    process::exit,
+};
 
 struct Config {
     pub query: String,
@@ -85,23 +89,22 @@ impl Config {
 }
 
 fn print_help() {
-    println!(
-        concat!("Usage: rust_grep [OPTION]... QUERY [FILES]...\n",
-                "Search for PATTERN in FILES.\n",
-                "Example:\n",
-                "    rust_grep -i 'hello world' file1.txt file2.txt\n\n",
-                "Options:\n",
-                "-i          Ignore case distinctions in PATTERN\n",
-                "-n          Print line number with output lines\n",
-                "-v          Invert match: select non-matching lines\n",
-                "-F          String searching, disables regex\n",
-                "-f          Read patterns from file specified in QUERY\n",
-                "-x          Only match whole lines, only works with -F\n",
-                "-w          Only match whole words, only works with -F\n",
-                "-m <NUM>    Stop after NUM matches\n",
-                "-h          Print this help and exit"
-               )
-        );
+    println!(concat!(
+        "Usage: rust_grep [OPTION]... QUERY [FILES]...\n",
+        "Search for PATTERN in FILES.\n",
+        "Example:\n",
+        "    rust_grep -i 'hello world' file1.txt file2.txt\n\n",
+        "Options:\n",
+        "-i          Ignore case distinctions in PATTERN\n",
+        "-n          Print line number with output lines\n",
+        "-v          Invert match: select non-matching lines\n",
+        "-F          String searching, disables regex\n",
+        "-f          Read patterns from file specified in QUERY\n",
+        "-x          Only match whole lines, only works with -F\n",
+        "-w          Only match whole words, only works with -F\n",
+        "-m <NUM>    Stop after NUM matches\n",
+        "-h          Print this help and exit"
+    ));
 }
 
 fn main() {
@@ -110,7 +113,6 @@ fn main() {
 
 fn grep(cfg: Config) {
     let multiple_files = cfg.filenames.len() > 1;
-
 
     let mut matches: u32 = 0;
 
@@ -143,9 +145,15 @@ fn grep(cfg: Config) {
                     line = line.trim_end().to_string();
                     if (match_on == MatchOn::Anywhere && line.contains(pattern) ^ invert)
                         || (match_on == MatchOn::Line && (line == pattern.to_string()) ^ invert)
-                        || (match_on == MatchOn::Word && line.split_whitespace().any(|word| (word == pattern) ^ invert))
+                        || (match_on == MatchOn::Word
+                            && line
+                                .split_whitespace()
+                                .any(|word| (word == pattern) ^ invert))
                     {
-                        println!("{}", format_line(i, &line, cfg.show_lines, "stdin", multiple_files));
+                        println!(
+                            "{}",
+                            format_line(i, &line, cfg.show_lines, "stdin", multiple_files)
+                        );
                         matches += 1;
                     }
 
@@ -172,10 +180,16 @@ fn grep(cfg: Config) {
                 for (i, line) in content.lines().enumerate() {
                     if !printed.contains(&i)
                         && (match_on == MatchOn::Anywhere && line.contains(&pattern) ^ cfg.invert)
-                            || (match_on == MatchOn::Line && (line == pattern) ^ cfg.invert)
-                            || (match_on == MatchOn::Word && line.split_whitespace().any(|word| (word == &pattern) ^ cfg.invert))
+                        || (match_on == MatchOn::Line && (line == pattern) ^ cfg.invert)
+                        || (match_on == MatchOn::Word
+                            && line
+                                .split_whitespace()
+                                .any(|word| (word == &pattern) ^ cfg.invert))
                     {
-                        println!("{}", format_line(i, line, cfg.show_lines, "stdin", multiple_files));
+                        println!(
+                            "{}",
+                            format_line(i, line, cfg.show_lines, "stdin", multiple_files)
+                        );
                         printed.push(i);
                         matches += 1;
                     }
@@ -184,7 +198,6 @@ fn grep(cfg: Config) {
                         break;
                     }
                 }
-
             }
         }
     } else {
@@ -198,7 +211,7 @@ fn grep(cfg: Config) {
 
             if re.is_err() {
                 error(&format!("Error parsing regex: {}", re.err().unwrap()));
-                return
+                return;
             }
             patterns.push(re.unwrap());
         }
@@ -214,7 +227,10 @@ fn grep(cfg: Config) {
                     }
                     line = line.trim_end().to_string();
                     if pattern.is_match(&line) ^ invert {
-                        println!("{}", format_line(i, &line, cfg.show_lines, "stdin", multiple_files));
+                        println!(
+                            "{}",
+                            format_line(i, &line, cfg.show_lines, "stdin", multiple_files)
+                        );
                         matches += 1;
                     }
 
@@ -240,7 +256,10 @@ fn grep(cfg: Config) {
 
                 for (i, line) in content.lines().enumerate() {
                     if !printed.contains(&i) && pattern.is_match(line) ^ invert {
-                        println!("{}", format_line(i, line, show_lines, &filename, multiple_files));
+                        println!(
+                            "{}",
+                            format_line(i, line, show_lines, &filename, multiple_files)
+                        );
                         printed.push(i);
                         matches += 1;
                     }
@@ -254,7 +273,13 @@ fn grep(cfg: Config) {
     }
 }
 
-fn format_line(index: usize, line: &str, show_lines: bool, filename: &str, multiple_files: bool) -> String {
+fn format_line(
+    index: usize,
+    line: &str,
+    show_lines: bool,
+    filename: &str,
+    multiple_files: bool,
+) -> String {
     if multiple_files {
         if show_lines {
             format!("{}:{}:{}", filename, index + 1, line)
@@ -273,7 +298,11 @@ fn format_line(index: usize, line: &str, show_lines: bool, filename: &str, multi
 fn read_file(filename: &str) -> String {
     let contents = std::fs::read_to_string(filename);
     if contents.is_err() {
-        error(&format!("Error reading {}: {}", filename, contents.err().unwrap()));
+        error(&format!(
+            "Error reading {}: {}",
+            filename,
+            contents.err().unwrap()
+        ));
         exit(1) // Required because of borrow checker
     }
 
@@ -283,7 +312,11 @@ fn read_file(filename: &str) -> String {
 fn read_patterns_file_regex(filename: &str, case_sensitive: bool) -> Vec<Regex> {
     let content = std::fs::read_to_string(filename);
     if content.is_err() {
-        error(&format!("Error reading {}: {}", filename, content.err().unwrap()));
+        error(&format!(
+            "Error reading {}: {}",
+            filename,
+            content.err().unwrap()
+        ));
         return Vec::new();
     }
 
@@ -294,7 +327,12 @@ fn read_patterns_file_regex(filename: &str, case_sensitive: bool) -> Vec<Regex> 
             .build();
 
         if re.is_err() {
-            error(&format!("Error parsing regex: {} in {}:{}", re.err().unwrap(), &filename, i));
+            error(&format!(
+                "Error parsing regex: {} in {}:{}",
+                re.err().unwrap(),
+                &filename,
+                i
+            ));
             return Vec::new();
         }
 
@@ -307,11 +345,19 @@ fn read_patterns_file_regex(filename: &str, case_sensitive: bool) -> Vec<Regex> 
 fn read_patterns_file_string(filename: &str) -> Vec<String> {
     let content = std::fs::read_to_string(filename);
     if content.is_err() {
-        error(&format!("Error reading {}: {}", filename, content.err().unwrap()));
+        error(&format!(
+            "Error reading {}: {}",
+            filename,
+            content.err().unwrap()
+        ));
         return Vec::new();
     }
 
-    content.unwrap().lines().map(|line| line.trim().to_string()).collect()
+    content
+        .unwrap()
+        .lines()
+        .map(|line| line.trim().to_string())
+        .collect()
 }
 
 fn error(message: &str) {

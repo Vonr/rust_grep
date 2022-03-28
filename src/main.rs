@@ -1,8 +1,9 @@
 use regex::{Regex, RegexBuilder};
 use std::{
     env::{self, Args},
-    io::{self, BufRead, BufReader},
-    process::exit, fs::File,
+    fs::File,
+    io::{self, BufRead, BufReader, BufWriter, Seek, StdoutLock, Write},
+    process::exit,
 };
 
 struct Config {
@@ -125,40 +126,47 @@ fn grep(cfg: Config) {
 
     let istty = atty::is(atty::Stream::Stdin);
 
+    let stdout = std::io::stdout().lock();
+    let mut writer = BufWriter::new(stdout);
+
     if cfg.is_string_search {
         let mut patterns = Vec::new();
         if cfg.is_pattern_file {
-            patterns.append(&mut read_patterns_file_string(&query));
+            patterns = read_patterns_file_string(&query);
         } else {
             patterns.push(query);
         }
 
         if !istty {
-            let mut stdin = io::stdin().lock();
-            for pattern in &patterns {
-                let mut line = String::new();
-                let mut i: usize = 0;
-                while let Ok(bytes_read) = stdin.read_line(&mut line) {
-                    if bytes_read == 0 {
-                        break;
-                    }
-                    line = strip(&line).to_string();
-                    if (match_on == MatchOn::Anywhere && line.contains(pattern) ^ invert)
-                        || (match_on == MatchOn::Line && (line == pattern.to_string()) ^ invert)
-                        || (match_on == MatchOn::Word
-                            && line
-                                .split_whitespace()
-                                .any(|word| (word == pattern) ^ invert))
-                    {
-                        print_match(i, &line, cfg.show_lines, "stdin", multiple_files);
-                        matches += 1;
-                    }
+            let stdin = io::stdin().lock();
+            for (i, line) in stdin.lines().enumerate() {
+                if let Ok(line) = line {
+                    for pattern in &patterns {
+                        if (match_on == MatchOn::Anywhere && line.contains(pattern) ^ invert)
+                            || (match_on == MatchOn::Line && (line == pattern.to_owned()) ^ invert)
+                                || (match_on == MatchOn::Word
+                                    && line
+                                    .split_whitespace()
+                                    .any(|word| (word == pattern) ^ invert))
+                                {
+                                    print_match(
+                                        &mut writer,
+                                        i,
+                                        &line,
+                                        cfg.show_lines,
+                                        "stdin",
+                                        multiple_files,
+                                        );
+                                    matches += 1;
+                                }
 
-                    if max > 0 && matches >= max {
-                        break;
+                        if max > 0 && matches >= max {
+                            break;
+                        }
                     }
-                    i += 1;
-                    line.clear();
+                } else {
+                        error("Could not read line");
+                        break;
                 }
             }
             return;
@@ -168,24 +176,31 @@ fn grep(cfg: Config) {
             error("No files specified");
         }
 
-        for pattern in patterns {
-            for filename in &filenames {
-                let mut printed = Vec::new();
-                let mut matches: u32 = 0;
-                let reader = read_file(&filename);
+        for filename in &filenames {
+            let mut printed = Vec::new();
+            let mut matches: u32 = 0;
+            let reader = &mut read_file(&filename);
 
+            for pattern in &patterns {
                 for (i, line) in reader.lines().enumerate() {
                     let line = line.unwrap();
 
                     if !printed.contains(&i)
-                        && (match_on == MatchOn::Anywhere && line.contains(&pattern) ^ cfg.invert)
-                        || (match_on == MatchOn::Line && (line == pattern) ^ cfg.invert)
+                        && (match_on == MatchOn::Anywhere && line.contains(pattern) ^ cfg.invert)
+                        || (match_on == MatchOn::Line && (line == pattern.to_owned()) ^ cfg.invert)
                         || (match_on == MatchOn::Word
                             && line
                                 .split_whitespace()
-                                .any(|word| (word == &pattern) ^ cfg.invert))
+                                .any(|word| (word == pattern) ^ cfg.invert))
                     {
-                        print_match(i, &line, cfg.show_lines, "stdin", multiple_files);
+                        print_match(
+                            &mut writer,
+                            i,
+                            &line,
+                            cfg.show_lines,
+                            "stdin",
+                            multiple_files,
+                        );
                         printed.push(i);
                         matches += 1;
                     }
@@ -194,12 +209,15 @@ fn grep(cfg: Config) {
                         break;
                     }
                 }
+                reader
+                    .seek(io::SeekFrom::Start(0))
+                    .expect("Could not seek to start");
             }
         }
     } else {
         let mut patterns = Vec::new();
         if cfg.is_pattern_file {
-            patterns.append(&mut read_patterns_file_regex(&query, cfg.case_sensitive));
+            patterns = read_patterns_file_regex(&query, cfg.case_sensitive);
         } else {
             let re = RegexBuilder::new(&query)
                 .case_insensitive(!cfg.case_sensitive)
@@ -213,25 +231,29 @@ fn grep(cfg: Config) {
         }
 
         if !istty {
-            let mut stdin = io::stdin().lock();
-            for pattern in &patterns {
-                let mut line = String::new();
-                let mut i: usize = 0;
-                while let Ok(bytes_read) = stdin.read_line(&mut line) {
-                    if bytes_read == 0 {
-                        break;
-                    }
-                    line = strip(&line).to_string();
-                    if pattern.is_match(&line) ^ invert {
-                        print_match(i, &line, cfg.show_lines, "stdin", multiple_files);
-                        matches += 1;
-                    }
+            let stdin = io::stdin().lock();
+            for (i, line) in stdin.lines().enumerate() {
+                if let Ok(line) = line {
+                    for pattern in &patterns {
+                        if pattern.is_match(&line) ^ invert {
+                            print_match(
+                                &mut writer,
+                                i,
+                                &line,
+                                cfg.show_lines,
+                                "stdin",
+                                multiple_files,
+                            );
+                            matches += 1;
+                        }
 
-                    if max > 0 && matches >= max {
-                        break;
+                        if max > 0 && matches >= max {
+                            break;
+                        }
                     }
-                    i += 1;
-                    line.clear();
+                } else {
+                    error("Could not read line");
+                    break;
                 }
             }
             return;
@@ -241,62 +263,73 @@ fn grep(cfg: Config) {
             error("No files specified");
         }
 
-        for pattern in patterns {
-            for filename in &filenames {
-                let mut printed = Vec::new();
-                let mut matches: u32 = 0;
-                let buffer = read_file(&filename);
+        for filename in &filenames {
+            let mut printed = Vec::new();
+            let mut matches: u32 = 0;
+            let reader = &mut read_file(&filename);
 
-                for (i, line) in buffer.lines().enumerate() {
-                    let line = line.unwrap();
-                    if !printed.contains(&i) && pattern.is_match(&line) ^ invert {
-                        print_match(i, &line, show_lines, &filename, multiple_files);
-                        printed.push(i);
-                        matches += 1;
-                    }
+            for pattern in &patterns {
+                for (i, line) in reader.lines().enumerate() {
+                    if let Ok(line) = line {
+                        if !printed.contains(&i) && pattern.is_match(&line) ^ invert {
+                            print_match(
+                                &mut writer,
+                                i,
+                                &line,
+                                show_lines,
+                                &filename,
+                                multiple_files,
+                            );
+                            printed.push(i);
+                            matches += 1;
+                        }
 
-                    if max > 0 && matches >= max {
-                        break;
+                        if max > 0 && matches >= max {
+                            break;
+                        }
                     }
                 }
+                reader
+                    .seek(io::SeekFrom::Start(0))
+                    .expect("Could not seek to start");
             }
         }
     }
 }
 
 fn print_match(
+    writer: &mut BufWriter<StdoutLock>,
     index: usize,
     line: &str,
     show_lines: bool,
     filename: &str,
     multiple_files: bool,
 ) {
-    if multiple_files {
+    let line = if multiple_files {
         if show_lines {
-            println!("{}:{}:{}", filename, index + 1, line)
+            format!("{}:{}:{}\n", filename, index + 1, line)
         } else {
-            println!("{}:{}", filename, line)
+            format!("{}:{}\n", filename, line)
         }
     } else {
         if show_lines {
-            println!("{}:{}", index + 1, line)
+            format!("{}:{}\n", index + 1, line)
         } else {
-            println!("{}", line)
+            format!("{}\n", line)
         }
-    }
-}
+    };
 
-fn strip(s: &str) -> &str {
-    s
-        .strip_suffix("\r\n")
-        .or(s.strip_suffix("\n"))
-        .unwrap_or(s)
+    writer.write_all(line.as_bytes()).unwrap();
 }
 
 fn read_file(filename: &str) -> BufReader<File> {
     let file = File::open(filename);
     if file.is_err() {
-        error(&format!("Error reading {}: {}", filename, file.err().unwrap()));
+        error(&format!(
+            "Error reading {}: {}",
+            filename,
+            file.err().unwrap()
+        ));
         exit(1) // Required because of borrow checker
     }
 
@@ -350,7 +383,7 @@ fn read_patterns_file_string(filename: &str) -> Vec<String> {
     content
         .unwrap()
         .lines()
-        .map(|line| line.trim().to_string())
+        .map(|line| line.trim().to_owned())
         .collect()
 }
 

@@ -1,5 +1,6 @@
 use regex::{Regex, RegexBuilder};
 use std::{
+    collections::{HashMap, HashSet},
     env::{self, Args},
     fs::File,
     io::{self, BufRead, BufReader, BufWriter, Seek, StdoutLock, Write},
@@ -177,7 +178,7 @@ fn grep(cfg: Config) {
         }
 
         for filename in &filenames {
-            let mut printed = Vec::new();
+            let mut printed = HashSet::new();
             let mut matches: u32 = 0;
             let reader = &mut read_file(&filename);
 
@@ -207,7 +208,7 @@ fn grep(cfg: Config) {
                             "stdin",
                             multiple_files,
                         );
-                        printed.push(i);
+                        printed.insert(i);
                         matches += 1;
                     }
 
@@ -270,7 +271,7 @@ fn grep(cfg: Config) {
         }
 
         for filename in &filenames {
-            let mut printed = Vec::new();
+            let mut printed = HashSet::new();
             let mut matches: u32 = 0;
             let reader = &mut read_file(&filename);
 
@@ -291,7 +292,7 @@ fn grep(cfg: Config) {
                             &filename,
                             multiple_files,
                         );
-                        printed.push(i);
+                        printed.insert(i);
                         matches += 1;
                     }
 

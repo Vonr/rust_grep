@@ -127,7 +127,7 @@ fn grep(cfg: Config) {
     let istty = atty::is(atty::Stream::Stdin);
 
     let stdout = std::io::stdout().lock();
-    let mut writer = BufWriter::new(stdout);
+    let mut writer = BufWriter::with_capacity(32768, stdout);
 
     let mut patterns = Vec::new();
     if cfg.is_string_search {
@@ -182,21 +182,27 @@ fn grep(cfg: Config) {
             let reader = &mut read_file(&filename);
 
             for pattern in &patterns {
-                for (i, line) in reader.lines().enumerate() {
-                    let line = line.unwrap();
+                let mut line = String::new();
+                let mut i = 0;
+                while let Ok(bytes) = reader.read_line(&mut line) {
+                    if bytes == 0 {
+                        break;
+                    }
 
+                    let cleaned = clean_string(&line);
                     if !printed.contains(&i)
-                        && (match_on == MatchOn::Anywhere && line.contains(pattern) ^ cfg.invert)
-                        || (match_on == MatchOn::Line && (line == pattern.to_owned()) ^ cfg.invert)
+                        && (match_on == MatchOn::Anywhere && cleaned.contains(pattern) ^ cfg.invert)
+                        || (match_on == MatchOn::Line
+                            && (cleaned == pattern.to_owned()) ^ cfg.invert)
                         || (match_on == MatchOn::Word
-                            && line
+                            && cleaned
                                 .split_whitespace()
                                 .any(|word| (word == pattern) ^ cfg.invert))
                     {
                         print_match(
                             &mut writer,
                             i,
-                            &line,
+                            &cleaned,
                             cfg.show_lines,
                             "stdin",
                             multiple_files,
@@ -208,6 +214,8 @@ fn grep(cfg: Config) {
                     if max > 0 && matches >= max {
                         break;
                     }
+                    line.clear();
+                    i += 1;
                 }
                 reader.seek(io::SeekFrom::Start(0)).unwrap();
             }
@@ -267,30 +275,37 @@ fn grep(cfg: Config) {
             let reader = &mut read_file(&filename);
 
             for pattern in &patterns {
-                for (i, line) in reader.lines().enumerate() {
-                    if let Ok(line) = line {
-                        if !printed.contains(&i) && pattern.is_match(&line) ^ invert {
-                            print_match(
-                                &mut writer,
-                                i,
-                                &line,
-                                show_lines,
-                                &filename,
-                                multiple_files,
-                            );
-                            printed.push(i);
-                            matches += 1;
-                        }
-
-                        if max > 0 && matches >= max {
-                            break;
-                        }
+                let mut line = String::new();
+                let mut i = 0;
+                while let Ok(bytes) = reader.read_line(&mut line) {
+                    if bytes == 0 {
+                        break;
                     }
+                    let cleaned = clean_string(&line);
+                    if !printed.contains(&i) && pattern.is_match(&cleaned) ^ invert {
+                        print_match(
+                            &mut writer,
+                            i,
+                            &cleaned,
+                            show_lines,
+                            &filename,
+                            multiple_files,
+                        );
+                        printed.push(i);
+                        matches += 1;
+                    }
+
+                    if max > 0 && matches >= max {
+                        break;
+                    }
+                    line.clear();
+                    i += 1;
                 }
                 reader.seek(io::SeekFrom::Start(0)).unwrap();
             }
         }
     }
+    writer.flush().unwrap();
 }
 
 fn print_match(
@@ -381,4 +396,8 @@ fn error(message: &str) {
     eprintln!("{}", message);
     print_help();
     exit(1);
+}
+
+fn clean_string(s: &str) -> &str {
+    s.strip_suffix("\r\n").or(s.strip_suffix("\n")).unwrap_or(s)
 }

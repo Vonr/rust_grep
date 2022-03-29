@@ -37,29 +37,35 @@ impl Config {
         let mut is_string_search = false;
         let mut is_pattern_file = false;
         let mut match_on = MatchOn::Anywhere;
+        let mut finished = false;
 
         for arg in args.skip(1) {
-            if arg.starts_with("-") {
-                let trimmed = arg.trim_start_matches("-");
-                if trimmed.starts_with("m=") {
-                    max = trimmed[2..].parse().unwrap_or(0);
+            if !finished {
+                if arg == "--" {
+                    finished = true;
                     continue;
-                }
-                for c in trimmed.chars() {
-                    match c {
-                        'i' => case_sensitive = false,
-                        'n' => show_lines = true,
-                        'v' => invert = true,
-                        'F' => is_string_search = true,
-                        'f' => is_pattern_file = true,
-                        'w' => match_on = MatchOn::Word,
-                        'x' => match_on = MatchOn::Line,
-                        'h' => {
-                            print_help();
-                            exit(0);
-                        }
-                        _ => {
-                            error(&format!("Invalid flag: {}", c));
+                } else if arg.starts_with("-") {
+                    let trimmed = arg.trim_start_matches("-");
+                    if trimmed.starts_with("m=") {
+                        max = trimmed[2..].parse().unwrap_or(0);
+                        continue;
+                    }
+                    for c in trimmed.chars() {
+                        match c {
+                            'i' => case_sensitive = false,
+                            'n' => show_lines = true,
+                            'v' => invert = true,
+                            'F' => is_string_search = true,
+                            'f' => is_pattern_file = true,
+                            'w' => match_on = MatchOn::Word,
+                            'x' => match_on = MatchOn::Line,
+                            'h' => {
+                                print_help();
+                                exit(0);
+                            }
+                            _ => {
+                                error(&format!("Invalid flag: {}", c));
+                            }
                         }
                     }
                 }

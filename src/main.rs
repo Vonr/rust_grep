@@ -323,21 +323,22 @@ fn print_match(
     filename: &str,
     multiple_files: bool,
 ) {
-    let line = if multiple_files {
+    let res = if multiple_files {
         if show_lines {
-            format!("{}:{}:{}\n", filename, index + 1, line)
+            write!(writer, "{}:{}:{}\n", filename, index + 1, line)
         } else {
-            format!("{}:{}\n", filename, line)
+            write!(writer, "{}:{}\n", filename, line)
         }
     } else {
         if show_lines {
-            format!("{}:{}\n", index + 1, line)
+            write!(writer, "{}:{}\n", index + 1, line)
         } else {
-            format!("{}\n", line)
+            write!(writer, "{}\n", line)
         }
     };
-
-    writer.write_all(line.as_bytes()).unwrap();
+    if let Err(e) = res {
+        error(&format!("Error writing to stdout: {}", e));
+    }
 }
 
 fn read_file(filename: &str) -> BufReader<File> {

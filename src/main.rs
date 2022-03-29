@@ -68,13 +68,14 @@ impl Config {
                             }
                         }
                     }
+                    continue;
                 }
+            }
+
+            if query.is_empty() {
+                query = arg;
             } else {
-                if query.is_empty() {
-                    query = arg;
-                } else {
-                    filenames.push(arg);
-                }
+                filenames.push(arg);
             }
         }
 

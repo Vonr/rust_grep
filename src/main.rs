@@ -408,5 +408,5 @@ fn error(message: &str) {
 }
 
 fn clean_string(s: &str) -> &str {
-    s.strip_suffix("\r\n").or(s.strip_suffix("\n")).unwrap_or(s)
+    &s[..(s.len() - s.ends_with("\n") as usize - s.ends_with("\r\n") as usize)]
 }

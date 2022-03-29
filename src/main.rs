@@ -110,7 +110,7 @@ fn print_help() {
         "-f          Read patterns from file specified in QUERY\n",
         "-x          Only match whole lines, only works with -F\n",
         "-w          Only match whole words, only works with -F\n",
-        "-m <NUM>    Stop after NUM matches\n",
+        "-m=<NUM>    Stop after NUM matches\n",
         "-h          Print this help and exit"
     ));
 }

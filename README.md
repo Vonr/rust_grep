@@ -2,7 +2,7 @@
 
 ### Minimalist's grep written in Rust, inspired by ripgrep.
 
-### Disclaimer:
+### Disclaimer
 
 This project was made as a learning project.
 
@@ -35,11 +35,6 @@ Options:
 + Regex support
 + Reads from stdin so users can pipe programs' outputs into it (e.g. `seq 10000 | rust_grep '^\\d{1,3}$'`)
 + Customizable using command flags
-    + Ignore casing with the -i flag
-    + Show the line in which the match is found with the -n flag
-    + Specify the maximum number of matches to be found with the -m <max\_num> flag
-    + String searching with -F flag (disables regex search)
-    + Inversion of pattern with -v flag
 
 ### Todo(?)
 + Colour (Low Priority)

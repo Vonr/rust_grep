@@ -1,6 +1,6 @@
+use nohash_hasher::IntSet;
 use regex::{Regex, RegexBuilder};
 use std::{
-    collections::HashSet,
     env::{self, Args},
     fs::File,
     io::{self, BufRead, BufReader, BufWriter, Seek, StdoutLock, Write},
@@ -19,7 +19,7 @@ struct Config {
     pub match_on: MatchOn,
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone, Copy)]
 enum MatchOn {
     Anywhere,
     Line,
@@ -135,7 +135,7 @@ fn grep(cfg: Config) {
     let istty = atty::is(atty::Stream::Stdin);
 
     let stdout = std::io::stdout().lock();
-    let mut writer = BufWriter::with_capacity(32768, stdout);
+    let mut writer = BufWriter::with_capacity(16384, stdout);
 
     let mut patterns = Vec::new();
     if cfg.is_string_search {
@@ -150,26 +150,21 @@ fn grep(cfg: Config) {
             for (i, line) in stdin.lines().enumerate() {
                 if let Ok(line) = line {
                     for pattern in &patterns {
-                        if (match_on == MatchOn::Anywhere && line.contains(pattern) ^ invert)
-                            || (match_on == MatchOn::Line && (line == pattern.to_owned()) ^ invert)
-                            || (match_on == MatchOn::Word
-                                && line
-                                    .split_whitespace()
-                                    .any(|word| (word == pattern) ^ invert))
-                        {
-                            print_match(
-                                &mut writer,
-                                i,
-                                &line,
-                                cfg.show_lines,
-                                "stdin",
-                                multiple_files,
-                            );
+                        if check_string(
+                            &mut writer,
+                            show_lines,
+                            multiple_files,
+                            invert,
+                            match_on,
+                            i,
+                            &line,
+                            "stdin",
+                            pattern,
+                        ) {
                             matches += 1;
-                        }
-
-                        if max > 0 && matches >= max {
-                            break;
+                            if max > 0 && matches >= max {
+                                break;
+                            }
                         }
                     }
                 } else {
@@ -185,7 +180,7 @@ fn grep(cfg: Config) {
         }
 
         for filename in &filenames {
-            let mut printed = HashSet::new();
+            let mut printed = IntSet::default();
             let mut matches: u32 = 0;
             let reader = &mut read_file(&filename);
 
@@ -199,29 +194,25 @@ fn grep(cfg: Config) {
 
                     let cleaned = clean_string(&line);
                     if !printed.contains(&i)
-                        && (match_on == MatchOn::Anywhere && cleaned.contains(pattern) ^ cfg.invert)
-                        || (match_on == MatchOn::Line
-                            && (cleaned == pattern.to_owned()) ^ cfg.invert)
-                        || (match_on == MatchOn::Word
-                            && cleaned
-                                .split_whitespace()
-                                .any(|word| (word == pattern) ^ cfg.invert))
-                    {
-                        print_match(
+                        && check_string(
                             &mut writer,
-                            i,
-                            &cleaned,
-                            cfg.show_lines,
-                            "stdin",
+                            show_lines,
                             multiple_files,
-                        );
+                            invert,
+                            match_on,
+                            i,
+                            &cleaned.to_owned(),
+                            &filename,
+                            pattern,
+                        )
+                    {
                         printed.insert(i);
                         matches += 1;
+                        if max > 0 && matches >= max {
+                            break;
+                        }
                     }
 
-                    if max > 0 && matches >= max {
-                        break;
-                    }
                     line.clear();
                     i += 1;
                 }
@@ -249,20 +240,20 @@ fn grep(cfg: Config) {
             for (i, line) in stdin.lines().enumerate() {
                 if let Ok(line) = line {
                     for pattern in &patterns {
-                        if pattern.is_match(&line) ^ invert {
-                            print_match(
-                                &mut writer,
-                                i,
-                                &line,
-                                cfg.show_lines,
-                                "stdin",
-                                multiple_files,
-                            );
+                        if check_regex(
+                            &mut writer,
+                            show_lines,
+                            multiple_files,
+                            invert,
+                            i,
+                            &line,
+                            "stdin",
+                            pattern,
+                        ) {
                             matches += 1;
-                        }
-
-                        if max > 0 && matches >= max {
-                            break;
+                            if max > 0 && matches >= max {
+                                break;
+                            }
                         }
                     }
                 } else {
@@ -278,7 +269,7 @@ fn grep(cfg: Config) {
         }
 
         for filename in &filenames {
-            let mut printed = HashSet::new();
+            let mut printed = IntSet::default();
             let mut matches: u32 = 0;
             let reader = &mut read_file(&filename);
 
@@ -290,22 +281,25 @@ fn grep(cfg: Config) {
                         break;
                     }
                     let cleaned = clean_string(&line);
-                    if !printed.contains(&i) && pattern.is_match(&cleaned) ^ invert {
-                        print_match(
+                    if !printed.contains(&i)
+                        && check_regex(
                             &mut writer,
-                            i,
-                            &cleaned,
                             show_lines,
-                            &filename,
                             multiple_files,
-                        );
+                            invert,
+                            i,
+                            &cleaned.to_owned(),
+                            filename,
+                            pattern,
+                        )
+                    {
                         printed.insert(i);
                         matches += 1;
+                        if max > 0 && matches >= max {
+                            break;
+                        }
                     }
 
-                    if max > 0 && matches >= max {
-                        break;
-                    }
                     line.clear();
                     i += 1;
                 }
@@ -409,4 +403,45 @@ fn error(message: &str) {
 
 fn clean_string(s: &str) -> &str {
     &s[..(s.len() - s.ends_with("\n") as usize - s.ends_with("\r\n") as usize)]
+}
+
+fn check_string(
+    writer: &mut BufWriter<StdoutLock>,
+    show_lines: bool,
+    multiple_files: bool,
+    invert: bool,
+    match_on: MatchOn,
+    i: usize,
+    line: &String,
+    source: &str,
+    pattern: &String,
+) -> bool {
+    if (match_on == MatchOn::Anywhere && line.contains(pattern) ^ invert)
+        || (match_on == MatchOn::Line && (line == pattern) ^ invert)
+        || (match_on == MatchOn::Word
+            && line
+                .split_whitespace()
+                .any(|word| (word == pattern) ^ invert))
+    {
+        print_match(writer, i, &line, show_lines, source, multiple_files);
+        return true;
+    }
+    false
+}
+
+fn check_regex(
+    writer: &mut BufWriter<StdoutLock>,
+    show_lines: bool,
+    multiple_files: bool,
+    invert: bool,
+    i: usize,
+    line: &String,
+    source: &str,
+    pattern: &Regex,
+) -> bool {
+    if pattern.is_match(&line) ^ invert {
+        print_match(writer, i, &line, show_lines, source, multiple_files);
+        return true;
+    }
+    false
 }

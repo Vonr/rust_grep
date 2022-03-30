@@ -208,36 +208,34 @@ fn grep(cfg: Config) {
             }
         }
     } else {
-        let mut patterns = Vec::new();
         let re = RegexBuilder::new(&query)
             .case_insensitive(cfg.case_insensitive)
             .build();
 
-        if let Ok(re) = re {
-            patterns.push(re);
-        } else {
-            error(&format!("Error parsing regex: {}", re.err().unwrap()));
+        if let Err(err) = &re {
+            error(&format!("Error parsing regex: {}", err));
         }
+
+        let re = re.unwrap();
 
         if !istty {
             let stdin = io::stdin().lock();
+            let re = re.clone();
             for (i, line) in stdin.lines().enumerate() {
                 if let Ok(line) = line {
-                    for pattern in &patterns {
-                        if check_regex(
-                            &mut writer,
-                            show_lines,
-                            multiple_files,
-                            invert,
-                            i,
-                            &line,
-                            "stdin",
-                            pattern,
-                        ) {
-                            matches += 1;
-                            if max > 0 && matches >= max {
-                                break;
-                            }
+                    if check_regex(
+                        &mut writer,
+                        show_lines,
+                        multiple_files,
+                        invert,
+                        i,
+                        &line,
+                        "stdin",
+                        &re,
+                    ) {
+                        matches += 1;
+                        if max > 0 && matches >= max {
+                            break;
                         }
                     }
                 } else {
@@ -257,36 +255,34 @@ fn grep(cfg: Config) {
             let mut matches: u32 = 0;
             let reader = &mut read_file(&filename);
 
-            for pattern in &patterns {
-                let mut line = String::new();
-                let mut i = 0;
-                while let Ok(bytes) = reader.read_line(&mut line) {
-                    if bytes == 0 {
+            let mut line = String::new();
+            let mut i = 0;
+            while let Ok(bytes) = reader.read_line(&mut line) {
+                if bytes == 0 {
+                    break;
+                }
+                let cleaned = clean_string(&line);
+                if !printed.contains(&i)
+                    && check_regex(
+                        &mut writer,
+                        show_lines,
+                        multiple_files,
+                        invert,
+                        i,
+                        &cleaned.to_owned(),
+                        filename,
+                        &re,
+                    )
+                {
+                    printed.insert(i);
+                    matches += 1;
+                    if max > 0 && matches >= max {
                         break;
                     }
-                    let cleaned = clean_string(&line);
-                    if !printed.contains(&i)
-                        && check_regex(
-                            &mut writer,
-                            show_lines,
-                            multiple_files,
-                            invert,
-                            i,
-                            &cleaned.to_owned(),
-                            filename,
-                            pattern,
-                        )
-                    {
-                        printed.insert(i);
-                        matches += 1;
-                        if max > 0 && matches >= max {
-                            break;
-                        }
-                    }
-
-                    line.clear();
-                    i += 1;
                 }
+
+                line.clear();
+                i += 1;
                 reader.seek(io::SeekFrom::Start(0)).unwrap();
             }
         }

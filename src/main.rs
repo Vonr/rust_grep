@@ -13,9 +13,8 @@ struct Config {
     pub show_lines: bool,
     pub max: u32,
     pub invert: bool,
-    pub case_sensitive: bool,
+    pub case_insensitive: bool,
     pub is_string_search: bool,
-    pub is_pattern_file: bool,
     pub match_on: MatchOn,
 }
 
@@ -33,9 +32,8 @@ impl Config {
         let mut show_lines = false;
         let mut max = 0;
         let mut invert = false;
-        let mut case_sensitive = true;
+        let mut case_insensitive = false;
         let mut is_string_search = false;
-        let mut is_pattern_file = false;
         let mut match_on = MatchOn::Anywhere;
         let mut finished = false;
 
@@ -52,11 +50,10 @@ impl Config {
                     }
                     for c in trimmed.chars() {
                         match c {
-                            'i' => case_sensitive = false,
+                            'i' => case_insensitive = true,
                             'n' => show_lines = true,
                             'v' => invert = true,
                             'F' => is_string_search = true,
-                            'f' => is_pattern_file = true,
                             'w' => match_on = MatchOn::Word,
                             'x' => match_on = MatchOn::Line,
                             'h' => {
@@ -77,6 +74,7 @@ impl Config {
             } else {
                 filenames.push(arg);
             }
+            filenames.dedup();
         }
 
         if query.is_empty() {
@@ -89,9 +87,8 @@ impl Config {
             show_lines,
             max,
             invert,
-            case_sensitive,
+            case_insensitive,
             is_string_search,
-            is_pattern_file,
             match_on,
         }
     }
@@ -108,7 +105,6 @@ fn print_help() {
         "-n          Print line number with output lines\n",
         "-v          Invert match: select non-matching lines\n",
         "-F          String searching, disables regex\n",
-        "-f          Read patterns from file specified in QUERY\n",
         "-x          Only match whole lines, only works with -F\n",
         "-w          Only match whole words, only works with -F\n",
         "-m=<NUM>    Stop after NUM matches\n",
@@ -131,40 +127,33 @@ fn grep(cfg: Config) {
     let show_lines = cfg.show_lines;
     let max = cfg.max;
     let match_on = cfg.match_on;
+    let case_insensitive = cfg.case_insensitive;
 
     let istty = atty::is(atty::Stream::Stdin);
 
     let stdout = std::io::stdout().lock();
     let mut writer = BufWriter::with_capacity(16384, stdout);
 
-    let mut patterns = Vec::new();
     if cfg.is_string_search {
-        if cfg.is_pattern_file {
-            patterns = read_patterns_file_string(&query);
-        } else {
-            patterns.push(query);
-        }
-
         if !istty {
             let stdin = io::stdin().lock();
             for (i, line) in stdin.lines().enumerate() {
                 if let Ok(line) = line {
-                    for pattern in &patterns {
-                        if check_string(
-                            &mut writer,
-                            show_lines,
-                            multiple_files,
-                            invert,
-                            match_on,
-                            i,
-                            &line,
-                            "stdin",
-                            pattern,
-                        ) {
-                            matches += 1;
-                            if max > 0 && matches >= max {
-                                break;
-                            }
+                    if check_string(
+                        &mut writer,
+                        show_lines,
+                        multiple_files,
+                        invert,
+                        case_insensitive,
+                        match_on,
+                        i,
+                        &line,
+                        "stdin",
+                        &query,
+                    ) {
+                        matches += 1;
+                        if max > 0 && matches >= max {
+                            break;
                         }
                     }
                 } else {
@@ -184,55 +173,50 @@ fn grep(cfg: Config) {
             let mut matches: u32 = 0;
             let reader = &mut read_file(&filename);
 
-            for pattern in &patterns {
-                let mut line = String::new();
-                let mut i = 0;
-                while let Ok(bytes) = reader.read_line(&mut line) {
-                    if bytes == 0 {
+            let mut line = String::new();
+            let mut i = 0;
+            while let Ok(bytes) = reader.read_line(&mut line) {
+                if bytes == 0 {
+                    break;
+                }
+
+                let cleaned = clean_string(&line);
+                if !printed.contains(&i)
+                    && check_string(
+                        &mut writer,
+                        show_lines,
+                        multiple_files,
+                        invert,
+                        case_insensitive,
+                        match_on,
+                        i,
+                        &cleaned.to_owned(),
+                        &filename,
+                        &query,
+                    )
+                {
+                    printed.insert(i);
+                    matches += 1;
+                    if max > 0 && matches >= max {
                         break;
                     }
-
-                    let cleaned = clean_string(&line);
-                    if !printed.contains(&i)
-                        && check_string(
-                            &mut writer,
-                            show_lines,
-                            multiple_files,
-                            invert,
-                            match_on,
-                            i,
-                            &cleaned.to_owned(),
-                            &filename,
-                            pattern,
-                        )
-                    {
-                        printed.insert(i);
-                        matches += 1;
-                        if max > 0 && matches >= max {
-                            break;
-                        }
-                    }
-
-                    line.clear();
-                    i += 1;
                 }
+
+                line.clear();
+                i += 1;
                 reader.seek(io::SeekFrom::Start(0)).unwrap();
             }
         }
     } else {
         let mut patterns = Vec::new();
-        if cfg.is_pattern_file {
-            patterns = read_patterns_file_regex(&query, cfg.case_sensitive);
-        } else {
-            let re = RegexBuilder::new(&query)
-                .case_insensitive(!cfg.case_sensitive)
-                .build();
+        let re = RegexBuilder::new(&query)
+            .case_insensitive(cfg.case_insensitive)
+            .build();
 
-            if let Ok(re) = re {
-                patterns.push(re);
-            } else {
-                error(&format!("Error parsing regex: {}", re.err().unwrap()));
-            }
+        if let Ok(re) = re {
+            patterns.push(re);
+        } else {
+            error(&format!("Error parsing regex: {}", re.err().unwrap()));
         }
 
         if !istty {
@@ -346,55 +330,6 @@ fn read_file(filename: &str) -> BufReader<File> {
     }
 }
 
-fn read_patterns_file_regex(filename: &str, case_sensitive: bool) -> Vec<Regex> {
-    let content = std::fs::read_to_string(filename);
-    if let Ok(content) = content {
-        let mut patterns = Vec::new();
-        for (i, line) in content.lines().enumerate() {
-            let re = RegexBuilder::new(line)
-                .case_insensitive(!case_sensitive)
-                .build();
-
-            if let Ok(re) = re {
-                patterns.push(re)
-            } else {
-                error(&format!(
-                    "Error parsing regex: {} in {}:{}",
-                    re.err().unwrap(),
-                    &filename,
-                    i
-                ));
-            }
-        }
-        patterns
-    } else {
-        error(&format!(
-            "Error reading {}: {}",
-            filename,
-            content.err().unwrap()
-        ));
-        return Vec::new();
-    }
-}
-
-fn read_patterns_file_string(filename: &str) -> Vec<String> {
-    let content = std::fs::read_to_string(filename);
-    let mut out = Vec::new();
-
-    if let Ok(content) = content {
-        for line in content.lines() {
-            out.push(line.to_owned());
-        }
-    } else {
-        error(&format!(
-            "Error reading {}: {}",
-            filename,
-            content.err().unwrap()
-        ));
-    }
-    out
-}
-
 fn error(message: &str) {
     eprintln!("{}", message);
     print_help();
@@ -410,13 +345,24 @@ fn check_string(
     show_lines: bool,
     multiple_files: bool,
     invert: bool,
+    case_insensitive: bool,
     match_on: MatchOn,
     i: usize,
     line: &String,
     source: &str,
     pattern: &String,
 ) -> bool {
-    if (match_on == MatchOn::Anywhere && line.contains(pattern) ^ invert)
+    let line = if case_insensitive {
+        line.to_lowercase()
+    } else {
+        line.to_owned()
+    };
+    let pattern = if case_insensitive {
+        pattern.to_lowercase()
+    } else {
+        pattern.to_owned()
+    };
+    if (match_on == MatchOn::Anywhere && line.contains(&pattern) ^ invert)
         || (match_on == MatchOn::Line && (line == pattern) ^ invert)
         || (match_on == MatchOn::Word
             && line

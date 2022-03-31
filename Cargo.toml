@@ -1,11 +1,11 @@
 [package]
-name = "rust_grep"
-version = "0.2.2"
+name = "grepox"
+version = "0.2.3"
 description = "Minimalist's grep written in Rust."
 license = "Unlicense"
 readme = "README.md"
-homepage = "https://github.com/Vonr/grrs"
-repository = "https://github.com/Vonr/grrs"
+homepage = "https://github.com/Vonr/grepox"
+repository = "https://github.com/Vonr/grepox"
 keywords = ["grep", "search", "cli", "fast", "minimal"]
 edition = "2021"
 

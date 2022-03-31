@@ -1,4 +1,3 @@
-use nohash_hasher::IntSet;
 use regex::{Regex, RegexBuilder};
 use std::{
     env::{self, Args},
@@ -135,6 +134,11 @@ fn grep(cfg: Config) {
     let mut writer = BufWriter::with_capacity(16384, stdout);
 
     if cfg.is_string_search {
+        let query = if case_insensitive {
+            query.to_lowercase()
+        } else {
+            query.to_owned()
+        };
         if !istty {
             let stdin = io::stdin().lock();
             for (i, line) in stdin.lines().enumerate() {
@@ -169,7 +173,6 @@ fn grep(cfg: Config) {
         }
 
         for filename in &filenames {
-            let mut printed = IntSet::default();
             let mut matches: u32 = 0;
             let reader = &mut read_file(&filename);
 
@@ -181,21 +184,18 @@ fn grep(cfg: Config) {
                 }
 
                 let cleaned = clean_string(&line);
-                if !printed.contains(&i)
-                    && check_string(
-                        &mut writer,
-                        show_lines,
-                        multiple_files,
-                        invert,
-                        case_insensitive,
-                        match_on,
-                        i,
-                        &cleaned.to_owned(),
-                        &filename,
-                        &query,
-                    )
-                {
-                    printed.insert(i);
+                if check_string(
+                    &mut writer,
+                    show_lines,
+                    multiple_files,
+                    invert,
+                    case_insensitive,
+                    match_on,
+                    i,
+                    &cleaned.to_owned(),
+                    &filename,
+                    &query,
+                ) {
                     matches += 1;
                     if max > 0 && matches >= max {
                         break;
@@ -250,7 +250,6 @@ fn grep(cfg: Config) {
         }
 
         for filename in &filenames {
-            let mut printed = IntSet::default();
             let mut matches: u32 = 0;
             let reader = &mut read_file(&filename);
 
@@ -261,19 +260,16 @@ fn grep(cfg: Config) {
                     break;
                 }
                 let cleaned = clean_string(&line);
-                if !printed.contains(&i)
-                    && check_regex(
-                        &mut writer,
-                        show_lines,
-                        multiple_files,
-                        invert,
-                        i,
-                        &cleaned.to_owned(),
-                        filename,
-                        &re,
-                    )
-                {
-                    printed.insert(i);
+                if check_regex(
+                    &mut writer,
+                    show_lines,
+                    multiple_files,
+                    invert,
+                    i,
+                    &cleaned.to_owned(),
+                    filename,
+                    &re,
+                ) {
                     matches += 1;
                     if max > 0 && matches >= max {
                         break;
@@ -351,13 +347,8 @@ fn check_string(
     } else {
         line.to_owned()
     };
-    let pattern = if case_insensitive {
-        pattern.to_lowercase()
-    } else {
-        pattern.to_owned()
-    };
-    if (match_on == MatchOn::Anywhere && line.contains(&pattern) ^ invert)
-        || (match_on == MatchOn::Line && (line == pattern) ^ invert)
+    if (match_on == MatchOn::Anywhere && line.contains(pattern) ^ invert)
+        || (match_on == MatchOn::Line && (line == pattern.to_owned()) ^ invert)
         || (match_on == MatchOn::Word
             && line
                 .split_whitespace()

@@ -1,6 +1,12 @@
 [package]
 name = "rust_grep"
 version = "0.2.2"
+description = "Minimalist's grep written in Rust."
+license = "Unlicense"
+readme = "README.md"
+homepage = "https://github.com/Vonr/grrs"
+repository = "https://github.com/Vonr/grrs"
+keywords = ["grep", "search", "cli", "fast", "minimal"]
 edition = "2021"
 
 [dependencies]

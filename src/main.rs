@@ -95,10 +95,10 @@ impl Config {
 
 fn print_help() {
     println!(concat!(
-        "Usage: rust_grep [OPTION]... QUERY [FILES]...\n",
+        "Usage: grepox [OPTION]... QUERY [FILES]...\n",
         "Search for PATTERN in FILES.\n",
         "Example:\n",
-        "    rust_grep -i 'hello world' file1.txt file2.txt\n\n",
+        "    grepox -i 'hello world' file1.txt file2.txt\n\n",
         "Options:\n",
         "-i          Ignore case distinctions in PATTERN\n",
         "-n          Print line number with output lines\n",

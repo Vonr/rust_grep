@@ -32,7 +32,7 @@ Options:
 
 ### Features
 + Regex support
-+ Reads from stdin so users can pipe programs' outputs into it (e.g. `seq 10000 | rust_grep '^\\d{1,3}$'`)
++ Reads from stdin so users can pipe programs' outputs into it (e.g. `seq 10000 | grepox '^\d{1,3}$'`)
 + Customizable using command flags
 
 ### Todo(?)

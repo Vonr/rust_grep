@@ -3,7 +3,7 @@ use regex::{Regex, RegexBuilder};
 use std::{
     env::{self, Args},
     fs::File,
-    io::{self, BufRead, BufReader, BufWriter, Seek, StdoutLock, Write},
+    io::{self, BufRead, BufReader, BufWriter, StdoutLock, Write},
     process::exit,
 };
 
@@ -204,7 +204,6 @@ fn grep(cfg: Config) {
 
                 line.clear();
                 i += 1;
-                reader.seek(io::SeekFrom::Start(0)).unwrap();
             }
         }
     } else {
@@ -283,7 +282,6 @@ fn grep(cfg: Config) {
 
                 line.clear();
                 i += 1;
-                reader.seek(io::SeekFrom::Start(0)).unwrap();
             }
         }
     }

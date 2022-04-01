@@ -82,22 +82,6 @@ impl Config {
             match_on,
         }
     }
-
-    fn is_case_insensitive(&self) -> bool {
-        self.flags & 0b00000001 != 0
-    }
-
-    fn is_show_lines(&self) -> bool {
-        self.flags & 0b00000010 != 0
-    }
-
-    fn is_invert(&self) -> bool {
-        self.flags & 0b00000100 != 0
-    }
-
-    fn is_string_search(&self) -> bool {
-        self.flags & 0b00001000 != 0
-    }
 }
 
 fn print_help() {
@@ -131,10 +115,11 @@ fn grep(cfg: Config) {
     let filenames = cfg.filenames;
     let max = cfg.max;
 
-    let case_insensitive = cfg.is_case_insensitive();
-    let show_lines = cfg.is_show_lines();
-    let invert = cfg.is_invert();
-    let string_search = cfg.is_string_search();
+    let flags = cfg.flags;
+    let case_insensitive = flags & 0b00000001 > 0;
+    let show_lines = flags & 0b00000010 > 0;
+    let invert = flags & 0b00000100 > 0;
+    let string_search = flags & 0b00001000 > 0;
 
     let match_on = cfg.match_on;
 

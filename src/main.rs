@@ -140,30 +140,35 @@ fn grep(cfg: Config) {
             query.to_owned()
         };
         if !istty {
-            let stdin = io::stdin().lock();
-            for (i, line) in stdin.lines().enumerate() {
-                if let Ok(line) = line {
-                    if check_string(
-                        &mut writer,
-                        show_lines,
-                        multiple_files,
-                        invert,
-                        case_insensitive,
-                        match_on,
-                        i,
-                        &line,
-                        "stdin",
-                        &query,
-                    ) {
-                        matches += 1;
-                        if max > 0 && matches >= max {
-                            break;
-                        }
-                    }
-                } else {
-                    error("Could not read line");
+            let mut stdin = io::stdin().lock();
+            let mut line = String::new();
+            let mut i = 0;
+            while let Ok(bytes) = stdin.read_line(&mut line) {
+                if bytes == 0 {
                     break;
                 }
+
+                let cleaned = clean_string(&line);
+                if check_string(
+                    &mut writer,
+                    show_lines,
+                    multiple_files,
+                    invert,
+                    case_insensitive,
+                    match_on,
+                    i,
+                    &cleaned.to_owned(),
+                    "stdin",
+                    &query,
+                ) {
+                    matches += 1;
+                    if max > 0 && matches >= max {
+                        break;
+                    }
+                }
+
+                line.clear();
+                i += 1;
             }
             return;
         }
@@ -218,29 +223,34 @@ fn grep(cfg: Config) {
         let re = re.unwrap();
 
         if !istty {
-            let stdin = io::stdin().lock();
+            let mut stdin = io::stdin().lock();
+            let mut line = String::new();
+            let mut i = 0;
             let re = re.clone();
-            for (i, line) in stdin.lines().enumerate() {
-                if let Ok(line) = line {
-                    if check_regex(
-                        &mut writer,
-                        show_lines,
-                        multiple_files,
-                        invert,
-                        i,
-                        &line,
-                        "stdin",
-                        &re,
-                    ) {
-                        matches += 1;
-                        if max > 0 && matches >= max {
-                            break;
-                        }
-                    }
-                } else {
-                    error("Could not read line");
+            while let Ok(bytes) = stdin.read_line(&mut line) {
+                if bytes == 0 {
                     break;
                 }
+
+                let cleaned = clean_string(&line);
+                if check_regex(
+                    &mut writer,
+                    show_lines,
+                    multiple_files,
+                    invert,
+                    i,
+                    &cleaned.to_owned(),
+                    "stdin",
+                    &re,
+                ) {
+                    matches += 1;
+                    if max > 0 && matches >= max {
+                        break;
+                    }
+                }
+
+                line.clear();
+                i += 1;
             }
             return;
         }
@@ -327,7 +337,7 @@ fn error(message: &str) {
 }
 
 fn clean_string(s: &str) -> &str {
-    &s[..(s.len() - s.ends_with("\n") as usize - s.ends_with("\r\n") as usize)]
+    &s.trim_end_matches(|c| c == '\n' || c == '\r')
 }
 
 fn check_string(

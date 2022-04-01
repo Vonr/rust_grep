@@ -9,11 +9,8 @@ use std::{
 struct Config {
     pub query: String,
     pub filenames: Vec<String>,
-    pub show_lines: bool,
     pub max: u32,
-    pub invert: bool,
-    pub case_insensitive: bool,
-    pub is_string_search: bool,
+    pub flags: u8,
     pub match_on: MatchOn,
 }
 
@@ -28,11 +25,8 @@ impl Config {
     fn new(args: Args) -> Config {
         let mut query = String::new();
         let mut filenames: Vec<String> = Vec::new();
-        let mut show_lines = false;
         let mut max = 0;
-        let mut invert = false;
-        let mut case_insensitive = false;
-        let mut is_string_search = false;
+        let mut flags: u8 = 0b00000000;
         let mut match_on = MatchOn::Anywhere;
         let mut finished = false;
 
@@ -49,10 +43,10 @@ impl Config {
                     }
                     for c in trimmed.chars() {
                         match c {
-                            'i' => case_insensitive = true,
-                            'n' => show_lines = true,
-                            'v' => invert = true,
-                            'F' => is_string_search = true,
+                            'i' => flags |= 0b00000001,
+                            'n' => flags |= 0b00000010,
+                            'v' => flags |= 0b00000100,
+                            'F' => flags |= 0b00001000,
                             'w' => match_on = MatchOn::Word,
                             'x' => match_on = MatchOn::Line,
                             'h' => {
@@ -83,11 +77,8 @@ impl Config {
         Config {
             query,
             filenames,
-            show_lines,
             max,
-            invert,
-            case_insensitive,
-            is_string_search,
+            flags,
             match_on,
         }
     }
@@ -122,18 +113,22 @@ fn grep(cfg: Config) {
 
     let query = cfg.query;
     let filenames = cfg.filenames;
-    let invert = cfg.invert;
-    let show_lines = cfg.show_lines;
     let max = cfg.max;
+
+    let flags = cfg.flags;
+    let case_insensitive = flags & 0b00000001 > 0;
+    let show_lines = flags & 0b00000010 > 0;
+    let invert = flags & 0b00000100 > 0;
+    let string_search = flags & 0b00001000 > 0;
+
     let match_on = cfg.match_on;
-    let case_insensitive = cfg.case_insensitive;
 
     let istty = atty::is(atty::Stream::Stdin);
 
     let stdout = std::io::stdout().lock();
     let mut writer = BufWriter::with_capacity(16384, stdout);
 
-    if cfg.is_string_search {
+    if string_search {
         let query = if case_insensitive {
             query.to_lowercase()
         } else {
@@ -161,9 +156,11 @@ fn grep(cfg: Config) {
                     "stdin",
                     &query,
                 ) {
-                    matches += 1;
-                    if max > 0 && matches >= max {
-                        break;
+                    if max > 0 {
+                        matches += 1;
+                        if matches >= max {
+                            break;
+                        }
                     }
                 }
 
@@ -201,9 +198,11 @@ fn grep(cfg: Config) {
                     &filename,
                     &query,
                 ) {
-                    matches += 1;
-                    if max > 0 && matches >= max {
-                        break;
+                    if max > 0 {
+                        matches += 1;
+                        if matches >= max {
+                            break;
+                        }
                     }
                 }
 
@@ -213,7 +212,7 @@ fn grep(cfg: Config) {
         }
     } else {
         let re = RegexBuilder::new(&query)
-            .case_insensitive(cfg.case_insensitive)
+            .case_insensitive(case_insensitive)
             .build();
 
         if let Err(err) = &re {
@@ -243,9 +242,11 @@ fn grep(cfg: Config) {
                     "stdin",
                     &re,
                 ) {
-                    matches += 1;
-                    if max > 0 && matches >= max {
-                        break;
+                    if max > 0 {
+                        matches += 1;
+                        if matches >= max {
+                            break;
+                        }
                     }
                 }
 
@@ -280,9 +281,11 @@ fn grep(cfg: Config) {
                     filename,
                     &re,
                 ) {
-                    matches += 1;
-                    if max > 0 && matches >= max {
-                        break;
+                    if max > 0 {
+                        matches += 1;
+                        if matches >= max {
+                            break;
+                        }
                     }
                 }
 

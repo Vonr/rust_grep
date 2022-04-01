@@ -96,11 +96,11 @@ impl Config {
 fn print_help() {
     println!(concat!(
         "Usage: grepox [OPTION]... QUERY [FILES]...\n",
-        "Search for PATTERN in FILES.\n",
+        "Search for QUERY in FILES.\n",
         "Example:\n",
         "    grepox -i 'hello world' file1.txt file2.txt\n\n",
         "Options:\n",
-        "-i          Ignore case distinctions in PATTERN\n",
+        "-i          Ignore case distinctions in QUERY\n",
         "-n          Print line number with output lines\n",
         "-v          Invert match: select non-matching lines\n",
         "-F          String searching, disables regex\n",

@@ -15,12 +15,12 @@ This project is also unlikely to receive any updates as it is already "finished"
 ### Usage
 ```
 Usage: grepox [OPTION]... QUERY [FILES]...
-Search for PATTERN in FILES.
+Search for QUERY in FILES.
 Example:
     grepox -i 'hello world' file1.txt file2.txt
 
 Options:
--i          Ignore case distinctions in PATTERN
+-i          Ignore case distinctions in QUERY
 -n          Print line number with output lines
 -v          Invert match: select non-matching lines
 -F          String searching, disables regex

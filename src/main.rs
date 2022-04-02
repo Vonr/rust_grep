@@ -1,3 +1,4 @@
+use naive_opt::Search;
 use regex::{Regex, RegexBuilder};
 use std::{
     env::{self, Args},
@@ -360,7 +361,7 @@ fn check_string(
     } else {
         line.to_owned()
     };
-    if (match_on == MatchOn::Anywhere && line.contains(pattern) ^ invert)
+    if (match_on == MatchOn::Anywhere && line.includes(pattern) ^ invert)
         || (match_on == MatchOn::Line && (line == pattern.to_owned()) ^ invert)
         || (match_on == MatchOn::Word
             && line

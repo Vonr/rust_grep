@@ -1,4 +1,5 @@
 # grepox
+![Crates.io](https://img.shields.io/crates/v/grepox)
 
 ### Minimalist's grep written in Rust, inspired by ripgrep.
 

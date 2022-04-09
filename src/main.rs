@@ -23,7 +23,7 @@ enum MatchOn {
 }
 
 impl Config {
-    fn new(args: Args) -> Config {
+    fn new(args: Args) -> Self {
         let mut query = String::new();
         let mut filenames: Vec<String> = Vec::new();
         let mut max = 0;
@@ -36,10 +36,10 @@ impl Config {
                 if arg == "--" {
                     finished = true;
                     continue;
-                } else if arg.starts_with("-") {
-                    let trimmed = arg.trim_start_matches("-");
-                    if trimmed.starts_with("m=") {
-                        max = trimmed[2..].parse().unwrap_or(0);
+                } else if arg.starts_with('-') {
+                    let trimmed = arg.trim_start_matches('-');
+                    if let Some(stripped) = trimmed.strip_prefix("m=") {
+                        max = stripped.parse().unwrap_or(0);
                         continue;
                     }
                     for c in trimmed.chars() {
@@ -75,7 +75,7 @@ impl Config {
             error("No query specified");
         }
 
-        Config {
+        Self {
             query,
             filenames,
             max,
@@ -133,7 +133,7 @@ fn grep(cfg: Config) {
         let query = if case_insensitive {
             query.to_lowercase()
         } else {
-            query.to_owned()
+            query
         };
         if !istty {
             let mut stdin = io::stdin().lock();
@@ -156,12 +156,11 @@ fn grep(cfg: Config) {
                     &cleaned.to_owned(),
                     "stdin",
                     &query,
-                ) {
-                    if max > 0 {
-                        matches += 1;
-                        if matches >= max {
-                            break;
-                        }
+                ) && max > 0
+                {
+                    matches += 1;
+                    if matches >= max {
+                        break;
                     }
                 }
 
@@ -171,13 +170,13 @@ fn grep(cfg: Config) {
             return;
         }
 
-        if filenames.len() == 0 {
+        if filenames.is_empty() {
             error("No files specified");
         }
 
         for filename in &filenames {
             let mut matches: u32 = 0;
-            let reader = &mut read_file(&filename);
+            let reader = &mut read_file(filename);
 
             let mut line = String::new();
             let mut i = 0;
@@ -196,14 +195,13 @@ fn grep(cfg: Config) {
                     match_on,
                     i,
                     &cleaned.to_owned(),
-                    &filename,
+                    filename,
                     &query,
-                ) {
-                    if max > 0 {
-                        matches += 1;
-                        if matches >= max {
-                            break;
-                        }
+                ) && max > 0
+                {
+                    matches += 1;
+                    if matches >= max {
+                        break;
                     }
                 }
 
@@ -239,15 +237,14 @@ fn grep(cfg: Config) {
                     multiple_files,
                     invert,
                     i,
-                    &cleaned.to_owned(),
+                    cleaned.to_owned(),
                     "stdin",
                     &re,
-                ) {
-                    if max > 0 {
-                        matches += 1;
-                        if matches >= max {
-                            break;
-                        }
+                ) && max > 0
+                {
+                    matches += 1;
+                    if matches >= max {
+                        break;
                     }
                 }
 
@@ -257,13 +254,13 @@ fn grep(cfg: Config) {
             return;
         }
 
-        if filenames.len() == 0 {
+        if filenames.is_empty() {
             error("No files specified");
         }
 
         for filename in &filenames {
             let mut matches: u32 = 0;
-            let reader = &mut read_file(&filename);
+            let reader = &mut read_file(filename);
 
             let mut line = String::new();
             let mut i = 0;
@@ -278,15 +275,14 @@ fn grep(cfg: Config) {
                     multiple_files,
                     invert,
                     i,
-                    &cleaned.to_owned(),
+                    cleaned.to_owned(),
                     filename,
                     &re,
-                ) {
-                    if max > 0 {
-                        matches += 1;
-                        if matches >= max {
-                            break;
-                        }
+                ) && max > 0
+                {
+                    matches += 1;
+                    if matches >= max {
+                        break;
                     }
                 }
 
@@ -301,23 +297,21 @@ fn grep(cfg: Config) {
 fn print_match(
     writer: &mut BufWriter<StdoutLock>,
     index: usize,
-    line: &str,
+    line: String,
     show_lines: bool,
     filename: &str,
     multiple_files: bool,
 ) {
     let res = if multiple_files {
         if show_lines {
-            write!(writer, "{}:{}:{}\n", filename, index + 1, line)
+            writeln!(writer, "{}:{}:{}", filename, index + 1, line)
         } else {
-            write!(writer, "{}:{}\n", filename, line)
+            writeln!(writer, "{}:{}", filename, line)
         }
+    } else if show_lines {
+        writeln!(writer, "{}:{}", index + 1, line)
     } else {
-        if show_lines {
-            write!(writer, "{}:{}\n", index + 1, line)
-        } else {
-            write!(writer, "{}\n", line)
-        }
+        writeln!(writer, "{}", line)
     };
     if let Err(e) = res {
         error(&format!("Error writing to stdout: {}", e));
@@ -341,7 +335,7 @@ fn error(message: &str) {
 }
 
 fn clean_string(s: &str) -> &str {
-    &s.trim_end_matches(|c| c == '\n' || c == '\r')
+    s.trim_end_matches(|c| c == '\n' || c == '\r')
 }
 
 fn check_string(
@@ -362,13 +356,13 @@ fn check_string(
         line.to_owned()
     };
     if (match_on == MatchOn::Anywhere && line.includes(pattern) ^ invert)
-        || (match_on == MatchOn::Line && (line == pattern.to_owned()) ^ invert)
+        || (match_on == MatchOn::Line && (line == *pattern) ^ invert)
         || (match_on == MatchOn::Word
             && line
                 .split_whitespace()
                 .any(|word| (word == pattern) ^ invert))
     {
-        print_match(writer, i, &line, show_lines, source, multiple_files);
+        print_match(writer, i, line, show_lines, source, multiple_files);
         return true;
     }
     false
@@ -380,12 +374,12 @@ fn check_regex(
     multiple_files: bool,
     invert: bool,
     i: usize,
-    line: &String,
+    line: String,
     source: &str,
     pattern: &Regex,
 ) -> bool {
     if pattern.is_match(&line) ^ invert {
-        print_match(writer, i, &line, show_lines, source, multiple_files);
+        print_match(writer, i, line, show_lines, source, multiple_files);
         return true;
     }
     false

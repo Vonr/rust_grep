@@ -1,10 +1,13 @@
+use flume::{unbounded, Receiver, Sender};
 use naive_opt::Search;
 use regex::{Regex, RegexBuilder};
 use std::{
     env::{self, Args},
     fs::File,
     io::{self, BufRead, BufReader, BufWriter, StdoutLock, Write},
+    mem,
     process::exit,
+    thread,
 };
 
 struct Config {
@@ -110,8 +113,6 @@ fn main() {
 fn grep(cfg: Config) {
     let multiple_files = cfg.filenames.len() > 1;
 
-    let mut matches: u32 = 0;
-
     let query = cfg.query;
     let filenames = cfg.filenames;
     let max = cfg.max;
@@ -126,89 +127,76 @@ fn grep(cfg: Config) {
 
     let istty = atty::is(atty::Stream::Stdin);
 
+    let (tx, rx) = unbounded();
+
     let stdout = std::io::stdout().lock();
-    let mut writer = BufWriter::with_capacity(16384, stdout);
+    let mut writer = BufWriter::new(stdout);
+    let mut matches: u32 = 0;
+    let mut i = 0;
 
     if string_search {
-        let query = if case_insensitive {
-            query.to_lowercase()
-        } else {
-            query
+        let thread = {
+            let tx = tx;
+            thread::spawn(move || {
+                if !istty {
+                    let mut stdin = io::stdin().lock();
+                    let mut line = String::new();
+                    while let Ok(bytes) = stdin.read_line(&mut line) {
+                        if bytes == 0 {
+                            break;
+                        }
+
+                        let to_send = mem::take(&mut line);
+                        tx.send(to_send).unwrap();
+                    }
+                    return;
+                }
+
+                if filenames.is_empty() {
+                    error("No files specified");
+                }
+
+                for filename in &filenames {
+                    let reader = &mut read_file(filename);
+
+                    let mut line = String::new();
+                    while let Ok(bytes) = reader.read_line(&mut line) {
+                        if bytes == 0 {
+                            break;
+                        }
+
+                        let to_send = mem::take(&mut line);
+                        tx.send(to_send).unwrap();
+                    }
+                }
+            })
         };
-        if !istty {
-            let mut stdin = io::stdin().lock();
-            let mut line = String::new();
-            let mut i = 0;
-            while let Ok(bytes) = stdin.read_line(&mut line) {
-                if bytes == 0 {
+
+        while let Ok(line) = rx.recv() {
+            let cleaned = clean_string(&line);
+            if check_string(
+                &mut writer,
+                show_lines,
+                multiple_files,
+                invert,
+                case_insensitive,
+                match_on,
+                i,
+                &cleaned.to_owned(),
+                "stdin",
+                &query,
+            ) && max > 0
+            {
+                matches += 1;
+                if matches >= max {
                     break;
                 }
-
-                let cleaned = clean_string(&line);
-                if check_string(
-                    &mut writer,
-                    show_lines,
-                    multiple_files,
-                    invert,
-                    case_insensitive,
-                    match_on,
-                    i,
-                    &cleaned.to_owned(),
-                    "stdin",
-                    &query,
-                ) && max > 0
-                {
-                    matches += 1;
-                    if matches >= max {
-                        break;
-                    }
-                }
-
-                line.clear();
-                i += 1;
             }
-            return;
+
+            i += 1;
         }
 
-        if filenames.is_empty() {
-            error("No files specified");
-        }
-
-        for filename in &filenames {
-            let mut matches: u32 = 0;
-            let reader = &mut read_file(filename);
-
-            let mut line = String::new();
-            let mut i = 0;
-            while let Ok(bytes) = reader.read_line(&mut line) {
-                if bytes == 0 {
-                    break;
-                }
-
-                let cleaned = clean_string(&line);
-                if check_string(
-                    &mut writer,
-                    show_lines,
-                    multiple_files,
-                    invert,
-                    case_insensitive,
-                    match_on,
-                    i,
-                    &cleaned.to_owned(),
-                    filename,
-                    &query,
-                ) && max > 0
-                {
-                    matches += 1;
-                    if matches >= max {
-                        break;
-                    }
-                }
-
-                line.clear();
-                i += 1;
-            }
-        }
+        thread.join().unwrap();
     } else {
         let re = RegexBuilder::new(&query)
             .case_insensitive(case_insensitive)
@@ -220,78 +208,66 @@ fn grep(cfg: Config) {
 
         let re = re.unwrap();
 
-        if !istty {
-            let mut stdin = io::stdin().lock();
-            let mut line = String::new();
-            let mut i = 0;
-            let re = re.clone();
-            while let Ok(bytes) = stdin.read_line(&mut line) {
-                if bytes == 0 {
-                    break;
+        let thread = {
+            let tx = tx;
+            thread::spawn(move || {
+                if !istty {
+                    let mut stdin = io::stdin().lock();
+                    let mut line = String::new();
+                    while let Ok(bytes) = stdin.read_line(&mut line) {
+                        if bytes == 0 {
+                            break;
+                        }
+
+                        let to_send = mem::take(&mut line);
+                        tx.send(to_send).unwrap();
+                    }
+                    return;
                 }
 
-                let cleaned = clean_string(&line);
-                if check_regex(
-                    &mut writer,
-                    show_lines,
-                    multiple_files,
-                    invert,
-                    i,
-                    cleaned.to_owned(),
-                    "stdin",
-                    &re,
-                ) && max > 0
-                {
-                    matches += 1;
-                    if matches >= max {
-                        break;
+                if filenames.is_empty() {
+                    error("No files specified");
+                }
+
+                for filename in &filenames {
+                    let reader = &mut read_file(filename);
+
+                    let mut line = String::new();
+                    while let Ok(bytes) = reader.read_line(&mut line) {
+                        if bytes == 0 {
+                            break;
+                        }
+
+                        let to_send = mem::take(&mut line);
+                        tx.send(to_send).unwrap();
                     }
                 }
+            })
+        };
 
-                line.clear();
-                i += 1;
-            }
-            return;
-        }
-
-        if filenames.is_empty() {
-            error("No files specified");
-        }
-
-        for filename in &filenames {
-            let mut matches: u32 = 0;
-            let reader = &mut read_file(filename);
-
-            let mut line = String::new();
-            let mut i = 0;
-            while let Ok(bytes) = reader.read_line(&mut line) {
-                if bytes == 0 {
+        while let Ok(line) = rx.recv() {
+            let cleaned = clean_string(&line);
+            if check_regex(
+                &mut writer,
+                show_lines,
+                multiple_files,
+                invert,
+                i,
+                cleaned.to_owned(),
+                "stdin",
+                &re,
+            ) && max > 0
+            {
+                matches += 1;
+                if matches >= max {
                     break;
                 }
-                let cleaned = clean_string(&line);
-                if check_regex(
-                    &mut writer,
-                    show_lines,
-                    multiple_files,
-                    invert,
-                    i,
-                    cleaned.to_owned(),
-                    filename,
-                    &re,
-                ) && max > 0
-                {
-                    matches += 1;
-                    if matches >= max {
-                        break;
-                    }
-                }
-
-                line.clear();
-                i += 1;
             }
+
+            i += 1;
         }
+        thread.join().unwrap();
     }
-    writer.flush().unwrap();
 }
 
 fn print_match(

@@ -156,7 +156,7 @@ fn grep(cfg: Config) {
                     case_insensitive,
                     match_on,
                     i,
-                    &cleaned.to_owned(),
+                    cleaned,
                     "stdin",
                     &query,
                 ) && max > 0
@@ -197,7 +197,7 @@ fn grep(cfg: Config) {
                     case_insensitive,
                     match_on,
                     i,
-                    &cleaned,
+                    cleaned,
                     filename,
                     &query,
                 ) && max > 0
@@ -381,8 +381,8 @@ fn check_regex(
     source: &str,
     pattern: &Regex,
 ) -> bool {
-    if pattern.is_match(&line) ^ invert {
-        print_match(writer, i, &line, show_lines, source, multiple_files);
+    if pattern.is_match(line) ^ invert {
+        print_match(writer, i, line, show_lines, source, multiple_files);
         return true;
     }
     false

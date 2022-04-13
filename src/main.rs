@@ -1,6 +1,7 @@
 use naive_opt::Search;
 use regex::{Regex, RegexBuilder};
 use std::{
+    borrow::Cow,
     env::{self, Args},
     fs::File,
     io::{self, BufRead, BufReader, BufWriter, StdoutLock, Write},
@@ -126,7 +127,8 @@ fn grep(cfg: Config) {
 
     let istty = atty::is(atty::Stream::Stdin);
 
-    let stdout = std::io::stdout().lock();
+    let stdout = std::io::stdout();
+    let stdout = stdout.lock();
     let mut writer = BufWriter::with_capacity(16384, stdout);
 
     if string_search {
@@ -136,7 +138,8 @@ fn grep(cfg: Config) {
             query
         };
         if !istty {
-            let mut stdin = io::stdin().lock();
+            let stdin = io::stdin();
+            let mut stdin = stdin.lock();
             let mut line = String::new();
             let mut i = 0;
             while let Ok(bytes) = stdin.read_line(&mut line) {
@@ -174,11 +177,11 @@ fn grep(cfg: Config) {
             error("No files specified");
         }
 
+        let mut line = String::new();
         for filename in &filenames {
             let mut matches: u32 = 0;
             let reader = &mut read_file(filename);
 
-            let mut line = String::new();
             let mut i = 0;
             while let Ok(bytes) = reader.read_line(&mut line) {
                 if bytes == 0 {
@@ -194,7 +197,7 @@ fn grep(cfg: Config) {
                     case_insensitive,
                     match_on,
                     i,
-                    &cleaned.to_owned(),
+                    &cleaned,
                     filename,
                     &query,
                 ) && max > 0
@@ -221,10 +224,10 @@ fn grep(cfg: Config) {
         let re = re.unwrap();
 
         if !istty {
-            let mut stdin = io::stdin().lock();
+            let stdin = io::stdin();
+            let mut stdin = stdin.lock();
             let mut line = String::new();
             let mut i = 0;
-            let re = re.clone();
             while let Ok(bytes) = stdin.read_line(&mut line) {
                 if bytes == 0 {
                     break;
@@ -237,7 +240,7 @@ fn grep(cfg: Config) {
                     multiple_files,
                     invert,
                     i,
-                    cleaned.to_owned(),
+                    cleaned,
                     "stdin",
                     &re,
                 ) && max > 0
@@ -258,11 +261,11 @@ fn grep(cfg: Config) {
             error("No files specified");
         }
 
+        let mut line = String::new();
         for filename in &filenames {
             let mut matches: u32 = 0;
             let reader = &mut read_file(filename);
 
-            let mut line = String::new();
             let mut i = 0;
             while let Ok(bytes) = reader.read_line(&mut line) {
                 if bytes == 0 {
@@ -275,7 +278,7 @@ fn grep(cfg: Config) {
                     multiple_files,
                     invert,
                     i,
-                    cleaned.to_owned(),
+                    cleaned,
                     filename,
                     &re,
                 ) && max > 0
@@ -297,7 +300,7 @@ fn grep(cfg: Config) {
 fn print_match(
     writer: &mut BufWriter<StdoutLock>,
     index: usize,
-    line: String,
+    line: &str,
     show_lines: bool,
     filename: &str,
     multiple_files: bool,
@@ -346,23 +349,23 @@ fn check_string(
     case_insensitive: bool,
     match_on: MatchOn,
     i: usize,
-    line: &String,
+    line: &str,
     source: &str,
-    pattern: &String,
+    pattern: &str,
 ) -> bool {
     let line = if case_insensitive {
-        line.to_lowercase()
+        Cow::Owned(line.to_lowercase())
     } else {
-        line.to_owned()
+        line.into()
     };
-    if (match_on == MatchOn::Anywhere && line.includes(pattern) ^ invert)
+    if (match_on == MatchOn::Anywhere && (&*line).includes(pattern) ^ invert)
         || (match_on == MatchOn::Line && (line == *pattern) ^ invert)
         || (match_on == MatchOn::Word
             && line
                 .split_whitespace()
                 .any(|word| (word == pattern) ^ invert))
     {
-        print_match(writer, i, line, show_lines, source, multiple_files);
+        print_match(writer, i, &line, show_lines, source, multiple_files);
         return true;
     }
     false
@@ -374,12 +377,12 @@ fn check_regex(
     multiple_files: bool,
     invert: bool,
     i: usize,
-    line: String,
+    line: &str,
     source: &str,
     pattern: &Regex,
 ) -> bool {
     if pattern.is_match(&line) ^ invert {
-        print_match(writer, i, line, show_lines, source, multiple_files);
+        print_match(writer, i, &line, show_lines, source, multiple_files);
         return true;
     }
     false

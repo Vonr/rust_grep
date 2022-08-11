@@ -77,6 +77,15 @@ impl Config {
             error("No query specified");
         }
 
+        // Toggle string search if the query contains no special characters
+        // This is done because string search is faster than regex search
+        if flags & 0b00001000 == 0 {
+            let plain_text = regex::RegexBuilder::new(r"^[a-zA-Z0-9\s]").build().unwrap();
+            if plain_text.is_match(&query) {
+                flags |= 0b00001000;
+            }
+        }
+
         Self {
             query,
             filenames,
@@ -119,10 +128,10 @@ fn grep(cfg: Config) {
     let max = cfg.max;
 
     let flags = cfg.flags;
-    let case_insensitive = flags & 0b00000001 > 0;
-    let show_lines = flags & 0b00000010 > 0;
-    let invert = flags & 0b00000100 > 0;
-    let string_search = flags & 0b00001000 > 0;
+    let case_insensitive = flags & 0b00000001 != 0;
+    let show_lines = flags & 0b00000010 != 0;
+    let invert = flags & 0b00000100 != 0;
+    let string_search = flags & 0b00001000 != 0;
 
     let match_on = cfg.match_on;
 
@@ -311,6 +320,7 @@ fn error(message: &str) {
     exit(1);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn check_string(
     writer: &mut BufWriter<StdoutLock>,
     show_lines: bool,
@@ -355,6 +365,7 @@ fn check_string(
     true
 }
 
+#[allow(clippy::too_many_arguments)]
 fn check_regex(
     writer: &mut BufWriter<StdoutLock>,
     show_lines: bool,

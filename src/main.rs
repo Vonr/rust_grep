@@ -1,10 +1,11 @@
-use naive_opt::Search;
-use regex::{Regex, RegexBuilder};
+use linereader::LineReader;
+use naive_opt::SearchBytes;
+use regex::bytes::{Regex, RegexBuilder};
 use std::{
     borrow::Cow,
     env::{self, Args},
     fs::File,
-    io::{self, BufRead, BufReader, BufWriter, StdoutLock, Write},
+    io::{self, BufWriter, StdoutLock, Write},
     process::exit,
 };
 
@@ -138,16 +139,9 @@ fn grep(cfg: Config) {
             query
         };
         if !istty {
-            let stdin = io::stdin();
-            let mut stdin = stdin.lock();
-            let mut line = String::new();
+            let mut reader = LineReader::new(io::stdin());
             let mut i = 0;
-            while let Ok(bytes) = stdin.read_line(&mut line) {
-                if bytes == 0 {
-                    break;
-                }
-
-                let cleaned = clean_string(&line);
+            while let Some(Ok(line)) = reader.next_line() {
                 if check_string(
                     &mut writer,
                     show_lines,
@@ -156,9 +150,9 @@ fn grep(cfg: Config) {
                     case_insensitive,
                     match_on,
                     i,
-                    cleaned,
+                    line,
                     "stdin",
-                    &query,
+                    query.as_bytes(),
                 ) && max > 0
                 {
                     matches += 1;
@@ -167,7 +161,6 @@ fn grep(cfg: Config) {
                     }
                 }
 
-                line.clear();
                 i += 1;
             }
             return;
@@ -177,18 +170,12 @@ fn grep(cfg: Config) {
             error("No files specified");
         }
 
-        let mut line = String::new();
         for filename in &filenames {
             let mut matches: u32 = 0;
             let reader = &mut read_file(filename);
 
             let mut i = 0;
-            while let Ok(bytes) = reader.read_line(&mut line) {
-                if bytes == 0 {
-                    break;
-                }
-
-                let cleaned = clean_string(&line);
+            while let Some(Ok(line)) = reader.next_line() {
                 if check_string(
                     &mut writer,
                     show_lines,
@@ -197,9 +184,9 @@ fn grep(cfg: Config) {
                     case_insensitive,
                     match_on,
                     i,
-                    cleaned,
+                    line,
                     filename,
-                    &query,
+                    query.as_bytes(),
                 ) && max > 0
                 {
                     matches += 1;
@@ -208,7 +195,6 @@ fn grep(cfg: Config) {
                     }
                 }
 
-                line.clear();
                 i += 1;
             }
         }
@@ -224,23 +210,16 @@ fn grep(cfg: Config) {
         let re = re.unwrap();
 
         if !istty {
-            let stdin = io::stdin();
-            let mut stdin = stdin.lock();
-            let mut line = String::new();
+            let mut reader = LineReader::new(io::stdin());
             let mut i = 0;
-            while let Ok(bytes) = stdin.read_line(&mut line) {
-                if bytes == 0 {
-                    break;
-                }
-
-                let cleaned = clean_string(&line);
+            while let Some(Ok(line)) = reader.next_line() {
                 if check_regex(
                     &mut writer,
                     show_lines,
                     multiple_files,
                     invert,
                     i,
-                    cleaned,
+                    line,
                     "stdin",
                     &re,
                 ) && max > 0
@@ -251,7 +230,6 @@ fn grep(cfg: Config) {
                     }
                 }
 
-                line.clear();
                 i += 1;
             }
             return;
@@ -261,24 +239,19 @@ fn grep(cfg: Config) {
             error("No files specified");
         }
 
-        let mut line = String::new();
         for filename in &filenames {
             let mut matches: u32 = 0;
             let reader = &mut read_file(filename);
 
             let mut i = 0;
-            while let Ok(bytes) = reader.read_line(&mut line) {
-                if bytes == 0 {
-                    break;
-                }
-                let cleaned = clean_string(&line);
+            while let Some(Ok(line)) = reader.next_line() {
                 if check_regex(
                     &mut writer,
                     show_lines,
                     multiple_files,
                     invert,
                     i,
-                    cleaned,
+                    line,
                     filename,
                     &re,
                 ) && max > 0
@@ -289,7 +262,6 @@ fn grep(cfg: Config) {
                     }
                 }
 
-                line.clear();
                 i += 1;
             }
         }
@@ -300,31 +272,33 @@ fn grep(cfg: Config) {
 fn print_match(
     writer: &mut BufWriter<StdoutLock>,
     index: usize,
-    line: &str,
+    line: &[u8],
     show_lines: bool,
     filename: &str,
     multiple_files: bool,
 ) {
     let res = if multiple_files {
         if show_lines {
-            writeln!(writer, "{}:{}:{}", filename, index + 1, line)
+            // write!(writer, "{}:{}:{}", filename, index + 1, line)
+            write!(writer, "{}:{}", filename, index + 1)
         } else {
-            writeln!(writer, "{}:{}", filename, line)
+            write!(writer, "{}", filename)
         }
     } else if show_lines {
-        writeln!(writer, "{}:{}", index + 1, line)
+        write!(writer, "{}", index + 1)
     } else {
-        writeln!(writer, "{}", line)
+        Ok(())
     };
+    writer.write_all(line).unwrap();
     if let Err(e) = res {
         error(&format!("Error writing to stdout: {}", e));
     }
 }
 
-fn read_file(filename: &str) -> BufReader<File> {
+fn read_file(filename: &str) -> LineReader<File> {
     let file = File::open(filename);
     if let Ok(file) = file {
-        BufReader::new(file)
+        LineReader::new(file)
     } else {
         error(&format!("Error reading {}", filename));
         exit(1); // Required due to borrow checker
@@ -337,10 +311,6 @@ fn error(message: &str) {
     exit(1);
 }
 
-fn clean_string(s: &str) -> &str {
-    s.trim_end_matches(|c| c == '\n' || c == '\r')
-}
-
 fn check_string(
     writer: &mut BufWriter<StdoutLock>,
     show_lines: bool,
@@ -349,26 +319,40 @@ fn check_string(
     case_insensitive: bool,
     match_on: MatchOn,
     i: usize,
-    line: &str,
+    line: &[u8],
     source: &str,
-    pattern: &str,
+    pattern: &[u8],
 ) -> bool {
     let line = if case_insensitive {
-        Cow::Owned(line.to_lowercase())
+        Cow::Owned(line.to_ascii_lowercase())
     } else {
-        line.into()
+        Cow::Borrowed(line)
     };
-    if (match_on == MatchOn::Anywhere && (&*line).includes(pattern) ^ invert)
-        || (match_on == MatchOn::Line && (line == *pattern) ^ invert)
-        || (match_on == MatchOn::Word
-            && line
-                .split_whitespace()
-                .any(|word| (word == pattern) ^ invert))
-    {
-        print_match(writer, i, &line, show_lines, source, multiple_files);
-        return true;
+    match match_on {
+        MatchOn::Anywhere => {
+            if !(&*line).includes_bytes(pattern) ^ invert {
+                return false;
+            }
+        }
+        MatchOn::Line => {
+            if (line != pattern) ^ invert {
+                return false;
+            }
+        }
+        MatchOn::Word => {
+            if !line
+                .split(|c| match c {
+                    b' ' | b'\x09'..=b'\x0d' => true,
+                    c => c > &b'\x7f',
+                })
+                .any(|word| (word == pattern) ^ invert)
+            {
+                return false;
+            }
+        }
     }
-    false
+    print_match(writer, i, &line, show_lines, source, multiple_files);
+    true
 }
 
 fn check_regex(
@@ -377,7 +361,7 @@ fn check_regex(
     multiple_files: bool,
     invert: bool,
     i: usize,
-    line: &str,
+    line: &[u8],
     source: &str,
     pattern: &Regex,
 ) -> bool {

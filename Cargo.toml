@@ -1,6 +1,6 @@
 [package]
 name = "grepox"
-version = "0.2.10"
+version = "0.2.11"
 description = "Minimalist's grep written in Rust."
 license = "Unlicense"
 readme = "README.md"
@@ -10,7 +10,7 @@ keywords = ["grep", "search", "cli", "fast", "minimal"]
 edition = "2021"
 
 [dependencies]
-regex = "1.5.5"
+regex = "1.6.0"
 atty = "0.2.14"
-naive_opt = "0.1.17"
+naive_opt = "0.1.18"
 linereader = "0.4.0"

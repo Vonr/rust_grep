@@ -44,15 +44,15 @@ impl Config {
                         max = stripped.parse().unwrap_or(0);
                         continue;
                     }
-                    for c in trimmed.chars() {
+                    for c in trimmed.bytes() {
                         match c {
-                            'i' => flags |= 0b00000001,
-                            'n' => flags |= 0b00000010,
-                            'v' => flags |= 0b00000100,
-                            'F' => flags |= 0b00001000,
-                            'w' => match_on = MatchOn::Word,
-                            'x' => match_on = MatchOn::Line,
-                            'h' => {
+                            b'i' => flags |= 0b00000001,
+                            b'n' => flags |= 0b00000010,
+                            b'v' => flags |= 0b00000100,
+                            b'F' => flags |= 0b00001000,
+                            b'w' => match_on = MatchOn::Word,
+                            b'x' => match_on = MatchOn::Line,
+                            b'h' => {
                                 print_help();
                                 exit(0);
                             }

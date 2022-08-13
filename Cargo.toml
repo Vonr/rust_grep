@@ -1,6 +1,6 @@
 [package]
 name = "grepox"
-version = "0.2.13"
+version = "0.2.14"
 description = "Minimalist's grep written in Rust."
 license = "Unlicense"
 readme = "README.md"

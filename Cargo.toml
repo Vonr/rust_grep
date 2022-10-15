@@ -10,16 +10,16 @@ keywords = ["grep", "search", "cli", "fast", "minimal"]
 edition = "2021"
 
 [profile.release]
-lto = true
+lto = "fat"
 codegen-units = 1
 panic = "abort"
 opt-level = 3
 overflow-checks = false
 strip = "symbols"
-target-cpu = "native"
 
 [dependencies]
 regex = "1.6.0"
 atty = "0.2.14"
 naive_opt = "0.1.18"
 linereader = "0.4.0"
+mimalloc = "0.1.30"

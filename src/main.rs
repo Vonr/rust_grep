@@ -1,13 +1,25 @@
 use linereader::LineReader;
+use mimalloc::MiMalloc;
 use naive_opt::SearchBytes;
 use regex::bytes::{Regex, RegexBuilder};
 use std::{
     borrow::Cow,
     env::{self, Args},
-    fs::File,
+    fs::{self, File},
     io::{self, BufWriter, StdoutLock, Write},
     process::exit,
 };
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
+
+macro_rules! error {
+    ($format:literal$(, $args:expr)*) => {
+        eprintln!($format$(, $args)*);
+        print_help();
+        exit(1);
+    };
+}
 
 struct Config {
     pub query: String,
@@ -46,10 +58,11 @@ impl Config {
                     }
                     for c in trimmed.bytes() {
                         match c {
-                            b'i' => flags |= 0b00000001,
-                            b'n' => flags |= 0b00000010,
-                            b'v' => flags |= 0b00000100,
-                            b'F' => flags |= 0b00001000,
+                            b'i' => flags |= 1 << 0,
+                            b'n' => flags |= 1 << 1,
+                            b'v' => flags |= 1 << 2,
+                            b'F' => flags |= 1 << 3,
+                            b'c' => flags |= 1 << 4,
                             b'w' => match_on = MatchOn::Word,
                             b'x' => match_on = MatchOn::Line,
                             b'h' => {
@@ -57,7 +70,7 @@ impl Config {
                                 exit(0);
                             }
                             _ => {
-                                error(&format!("Invalid flag: {}", c));
+                                error!("Invalid flag: {}", c as char);
                             }
                         }
                     }
@@ -67,19 +80,23 @@ impl Config {
 
             if query.is_empty() {
                 query = arg;
-            } else {
-                filenames.push(arg);
+            } else if let Ok(md) = fs::metadata(&arg) {
+                if md.is_file() {
+                    filenames.push(arg);
+                } else if md.is_dir() {
+                    walk(&mut filenames, &arg);
+                }
             }
             filenames.dedup();
         }
 
         if query.is_empty() {
-            error("No query specified");
+            error!("No query specified");
         }
 
         // Toggle string search if the query contains no special characters
         // This is done because string search is faster than regex search
-        if flags & 0b00001000 == 0 {
+        if flags & (1 << 3) == 0 {
             let plain_text = regex::RegexBuilder::new(r"^[a-zA-Z0-9\s]").build().unwrap();
             if plain_text.is_match(&query) {
                 flags |= 0b00001000;
@@ -96,20 +113,56 @@ impl Config {
     }
 }
 
+fn walk(filenames: &mut Vec<String>, dir: &str) {
+    let mut files = if let Ok(files) = fs::read_dir(dir) {
+        files
+    } else {
+        return;
+    };
+    while let Some(Ok(f)) = files.next() {
+        let metadata = if let Ok(metadata) = f.metadata() {
+            metadata
+        } else {
+            continue;
+        };
+
+        if let Some(path) = f.path().to_str() {
+            if metadata.is_file() {
+                filenames.push(path.to_owned());
+                continue;
+            }
+
+            if metadata.is_dir() {
+                walk(filenames, path);
+                continue;
+            }
+        }
+    }
+}
+
 fn print_help() {
-    println!(concat!(
-        "Usage: grepox [OPTION]... QUERY [FILES]...\n",
-        "Search for QUERY in FILES.\n",
-        "Example:\n",
-        "    grepox -i 'hello world' file1.txt file2.txt\n\n",
-        "Options:\n",
-        "-i          Ignore case distinctions in QUERY\n",
-        "-n          Print line number with output lines\n",
-        "-v          Invert match: select non-matching lines\n",
-        "-F          String searching, disables regex\n",
-        "-x          Only match whole lines, only works with -F\n",
-        "-w          Only match whole words, only works with -F\n",
-        "-m=<NUM>    Stop after NUM matches\n",
+    macro_rules! concatln {
+        ($($line:literal)*, $last:literal) => {
+            concat!($($line, "\n"),*, $last)
+        };
+    }
+    println!(concatln!(
+        "Usage: grepox [OPTION]... QUERY [FILES]..."
+        "Search for QUERY in FILES."
+        "Example:"
+        "    # Finds the phrase 'hello world' case-insensitively in file1.txt"
+        "    # and file2.txt and prints matches in color"
+        "    grepox -ci 'hello world' file1.txt file2.txt"
+        ""
+        "Options:"
+        "-i          Ignore case distinctions in QUERY"
+        "-n          Print line number with output lines"
+        "-v          Invert match: select non-matching lines"
+        "-F          String searching, disables regex"
+        "-x          Only match whole lines, only works with -F"
+        "-w          Only match whole words, only works with -F"
+        "-m=<NUM>    Stop after NUM matches"
+        "-c          Colorizes output",
         "-h          Print this help and exit"
     ));
 }
@@ -126,16 +179,24 @@ fn grep(cfg: Config) {
     let query = cfg.query;
     let filenames = cfg.filenames;
     let max = cfg.max;
+    let has_max = max > 0;
 
     let flags = cfg.flags;
-    let case_insensitive = flags & 0b00000001 != 0;
-    let show_lines = flags & 0b00000010 != 0;
-    let invert = flags & 0b00000100 != 0;
-    let string_search = flags & 0b00001000 != 0;
+
+    macro_rules! flag {
+        ($pos:literal) => {
+            flags & (1 << $pos) != 0
+        };
+    }
+    let case_insensitive = flag!(0);
+    let show_lines = flag!(1);
+    let invert = flag!(2);
+    let string_search = flag!(3);
+    let color = flag!(4);
 
     let match_on = cfg.match_on;
 
-    let istty = atty::is(atty::Stream::Stdin);
+    let is_tty = atty::is(atty::Stream::Stdin);
 
     let stdout = std::io::stdout();
     let stdout = stdout.lock();
@@ -147,8 +208,11 @@ fn grep(cfg: Config) {
         } else {
             query
         };
-        if !istty {
-            let mut reader = LineReader::new(io::stdin());
+        let query = query.as_bytes();
+        if !is_tty {
+            let stdin = io::stdin();
+            let stdin = stdin.lock();
+            let mut reader = LineReader::new(stdin);
             let mut i = 0;
             while let Some(Ok(line)) = reader.next_line() {
                 if check_string(
@@ -157,12 +221,13 @@ fn grep(cfg: Config) {
                     multiple_files,
                     invert,
                     case_insensitive,
+                    color,
                     match_on,
                     i,
                     line,
                     "stdin",
-                    query.as_bytes(),
-                ) && max > 0
+                    query,
+                ) && has_max
                 {
                     matches += 1;
                     if matches >= max {
@@ -176,7 +241,7 @@ fn grep(cfg: Config) {
         }
 
         if filenames.is_empty() {
-            error("No files specified");
+            error!("No files specified");
         }
 
         for filename in &filenames {
@@ -191,12 +256,13 @@ fn grep(cfg: Config) {
                     multiple_files,
                     invert,
                     case_insensitive,
+                    color,
                     match_on,
                     i,
                     line,
                     filename,
-                    query.as_bytes(),
-                ) && max > 0
+                    query,
+                ) && has_max
                 {
                     matches += 1;
                     if matches >= max {
@@ -213,13 +279,15 @@ fn grep(cfg: Config) {
             .build();
 
         if let Err(err) = &re {
-            error(&format!("Error parsing regex: {}", err));
+            error!("Error parsing regex: {}", err);
         }
 
         let re = re.unwrap();
 
-        if !istty {
-            let mut reader = LineReader::new(io::stdin());
+        if !is_tty {
+            let stdin = io::stdin();
+            let stdin = stdin.lock();
+            let mut reader = LineReader::new(stdin);
             let mut i = 0;
             while let Some(Ok(line)) = reader.next_line() {
                 if check_regex(
@@ -227,11 +295,12 @@ fn grep(cfg: Config) {
                     show_lines,
                     multiple_files,
                     invert,
+                    color,
                     i,
                     line,
                     "stdin",
                     &re,
-                ) && max > 0
+                ) && has_max
                 {
                     matches += 1;
                     if matches >= max {
@@ -245,7 +314,7 @@ fn grep(cfg: Config) {
         }
 
         if filenames.is_empty() {
-            error("No files specified");
+            error!("No files specified");
         }
 
         for filename in &filenames {
@@ -259,11 +328,12 @@ fn grep(cfg: Config) {
                     show_lines,
                     multiple_files,
                     invert,
+                    color,
                     i,
                     line,
                     filename,
                     &re,
-                ) && max > 0
+                ) && has_max
                 {
                     matches += 1;
                     if matches >= max {
@@ -288,36 +358,27 @@ fn print_match(
 ) {
     let res = if multiple_files {
         if show_lines {
-            // write!(writer, "{}:{}:{}", filename, index + 1, line)
-            write!(writer, "{}:{}", filename, index + 1)
+            write!(writer, "{}:{}:", filename, index + 1)
         } else {
-            write!(writer, "{}", filename)
+            write!(writer, "{}:", filename)
         }
     } else if show_lines {
-        write!(writer, "{}", index + 1)
+        write!(writer, "{}:", index + 1)
     } else {
         Ok(())
     };
-    writer.write_all(line).unwrap();
-    if let Err(e) = res {
-        error(&format!("Error writing to stdout: {}", e));
+    if let Err(e) = res.and_then(|_| writer.write_all(line)) {
+        error!("Error writing to stdout: {}", e);
     }
 }
 
 fn read_file(filename: &str) -> LineReader<File> {
-    let file = File::open(filename);
-    if let Ok(file) = file {
-        LineReader::new(file)
-    } else {
-        error(&format!("Error reading {}", filename));
-        exit(1); // Required due to borrow checker
-    }
-}
-
-fn error(message: &str) {
-    eprintln!("{}", message);
-    print_help();
-    exit(1);
+    File::open(filename).map_or_else(
+        |_| {
+            error!("Error reading {}", filename);
+        },
+        LineReader::new,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -327,6 +388,7 @@ fn check_string(
     multiple_files: bool,
     invert: bool,
     case_insensitive: bool,
+    color: bool,
     match_on: MatchOn,
     i: usize,
     line: &[u8],
@@ -338,29 +400,93 @@ fn check_string(
     } else {
         Cow::Borrowed(line)
     };
-    match match_on {
+    if !color || invert || match_on == MatchOn::Line {
+        match match_on {
+            MatchOn::Anywhere => {
+                if !(&*line).includes_bytes(pattern) ^ invert {
+                    return false;
+                }
+            }
+            MatchOn::Line => {
+                if (line != pattern) ^ invert {
+                    return false;
+                }
+            }
+            MatchOn::Word => {
+                if line
+                    .split(|c| match c {
+                        b' ' | b'\x09'..=b'\x0d' => true,
+                        c => *c > b'\x7f',
+                    })
+                    .all(|word| (word != pattern) ^ invert)
+                {
+                    return false;
+                }
+            }
+        }
+
+        print_match(writer, i, &line, show_lines, source, multiple_files);
+        return true;
+    }
+
+    let line = match match_on {
         MatchOn::Anywhere => {
-            if !(&*line).includes_bytes(pattern) ^ invert {
+            let indices: Vec<usize> = (&*line)
+                .search_indices_bytes(pattern)
+                .map(|(start, _)| start)
+                .collect();
+            if indices.is_empty() {
+                return false;
+            }
+
+            let mut colored = {
+                let mut _colored = Vec::with_capacity(line.len() + indices.len() * 10);
+                _colored.extend_from_slice(&line);
+                _colored
+            };
+
+            let mut moved = 0;
+            let len = pattern.len();
+
+            unsafe {
+                indices.into_iter().for_each(|idx| {
+                    colored.insert_bytes_unchecked(idx + moved, b"\x1b[31;1m");
+                    colored.insert_bytes_unchecked(idx + moved + len + 7, b"\x1b[m");
+                    moved += 10;
+                });
+            }
+
+            colored
+        }
+        MatchOn::Word => {
+            let mut colored = Vec::new();
+            let mut found = false;
+            line.split(|c| match c {
+                b' ' | b'\x09'..=b'\x0d' => true,
+                c => *c > b'\x7f',
+            })
+            .for_each(|word| {
+                if word == pattern {
+                    found = true;
+                    let _ = colored
+                        .write_all(b"\x1b[31;1m")
+                        .and_then(|_| colored.write_all(word))
+                        .and_then(|_| colored.write_all(b"\x1b[m "));
+                } else {
+                    let _ = colored.write_all(word).map(|_| colored.push(b' '));
+                }
+            });
+            if found {
+                colored.push(b'\n');
+                colored
+            } else {
                 return false;
             }
         }
         MatchOn::Line => {
-            if (line != pattern) ^ invert {
-                return false;
-            }
+            unreachable!()
         }
-        MatchOn::Word => {
-            if !line
-                .split(|c| match c {
-                    b' ' | b'\x09'..=b'\x0d' => true,
-                    c => c > &b'\x7f',
-                })
-                .any(|word| (word == pattern) ^ invert)
-            {
-                return false;
-            }
-        }
-    }
+    };
     print_match(writer, i, &line, show_lines, source, multiple_files);
     true
 }
@@ -371,14 +497,83 @@ fn check_regex(
     show_lines: bool,
     multiple_files: bool,
     invert: bool,
+    color: bool,
     i: usize,
     line: &[u8],
     source: &str,
     pattern: &Regex,
 ) -> bool {
+    if color && !invert {
+        let indices: Vec<(usize, usize)> = pattern
+            .find_iter(line)
+            .map(|loc| (loc.start(), loc.end()))
+            .collect();
+        if indices.is_empty() {
+            return false;
+        }
+
+        let mut line = {
+            let mut _line = Vec::with_capacity(line.len() + indices.len() * 10);
+            _line.extend_from_slice(line);
+            _line
+        };
+
+        let mut moved = 0;
+        unsafe {
+            indices.into_iter().for_each(|(start, end)| {
+                line.insert_bytes_unchecked(start + moved, b"\x1b[31;1m");
+                line.insert_bytes_unchecked(end + moved + 7, b"\x1b[m");
+                moved += 10;
+            });
+        }
+        print_match(writer, i, &line, show_lines, source, multiple_files);
+        return true;
+    }
     if pattern.is_match(line) ^ invert {
         print_match(writer, i, line, show_lines, source, multiple_files);
         return true;
     }
     false
+}
+
+pub trait InsertBytes {
+    fn insert_bytes(&mut self, idx: usize, bytes: &[u8]);
+    /// # Safety
+    ///
+    /// This function requires the caller to uphold the safety contract where the Vec's capacity is
+    /// over the sum of its current length and the length of the bytes to be inserted.
+    unsafe fn insert_bytes_unchecked(&mut self, idx: usize, bytes: &[u8]);
+}
+
+impl InsertBytes for Vec<u8> {
+    fn insert_bytes(&mut self, idx: usize, bytes: &[u8]) {
+        let len = self.len();
+        let amt = bytes.len();
+        self.reserve(amt);
+
+        unsafe {
+            std::ptr::copy(
+                self.as_ptr().add(idx),
+                self.as_mut_ptr().add(idx + amt),
+                len - idx,
+            );
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), self.as_mut_ptr().add(idx), amt);
+            self.set_len(len + amt);
+        }
+    }
+
+    unsafe fn insert_bytes_unchecked(&mut self, idx: usize, bytes: &[u8]) {
+        let len = self.len();
+        let amt = bytes.len();
+
+        unsafe {
+            std::ptr::copy(
+                self.as_ptr().add(idx),
+                self.as_mut_ptr().add(idx + amt),
+                len - idx,
+            );
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), self.as_mut_ptr().add(idx), amt);
+            self.set_len(len + amt);
+        }
+    }
 }

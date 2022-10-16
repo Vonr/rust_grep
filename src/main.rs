@@ -187,7 +187,7 @@ fn grep(cfg: Config) {
 
     let match_on = cfg.match_on;
 
-    let istty = atty::is(atty::Stream::Stdin);
+    let is_tty = atty::is(atty::Stream::Stdin);
 
     let stdout = std::io::stdout();
     let stdout = stdout.lock();
@@ -200,8 +200,10 @@ fn grep(cfg: Config) {
             query
         };
         let query = query.as_bytes();
-        if !istty {
-            let mut reader = LineReader::new(io::stdin());
+        if !is_tty {
+            let stdin = io::stdin();
+            let stdin = stdin.lock();
+            let mut reader = LineReader::new(stdin);
             let mut i = 0;
             while let Some(Ok(line)) = reader.next_line() {
                 if check_string(
@@ -273,8 +275,10 @@ fn grep(cfg: Config) {
 
         let re = re.unwrap();
 
-        if !istty {
-            let mut reader = LineReader::new(io::stdin());
+        if !is_tty {
+            let stdin = io::stdin();
+            let stdin = stdin.lock();
+            let mut reader = LineReader::new(stdin);
             let mut i = 0;
             while let Some(Ok(line)) = reader.next_line() {
                 if check_regex(
@@ -418,23 +422,31 @@ fn check_string(
 
     let line = match match_on {
         MatchOn::Anywhere => {
-            let mut found = false;
-            let mut moved = 0;
-            let mut colored = line.to_vec();
-            let len = pattern.len();
-
-            (&*line)
+            let indices: Vec<usize> = (&*line)
                 .search_indices_bytes(pattern)
-                .for_each(|(start, _)| {
-                    found = true;
-                    let index = start + moved;
-                    colored.insert_bytes(index, b"\x1b[31;1m");
-                    colored.insert_bytes(index + len + 7, b"\x1b[m");
-                    moved += 10;
-                });
-            if !found {
+                .map(|(start, _)| start)
+                .collect();
+            if indices.is_empty() {
                 return false;
             }
+
+            let mut colored = {
+                let mut _colored = Vec::with_capacity(line.len() + indices.len() * 10);
+                _colored.extend_from_slice(&line);
+                _colored
+            };
+
+            let mut moved = 0;
+            let len = pattern.len();
+
+            unsafe {
+                indices.into_iter().for_each(|idx| {
+                    colored.insert_bytes_unchecked(idx + moved, b"\x1b[31;1m");
+                    colored.insert_bytes_unchecked(idx + moved + len + 7, b"\x1b[m");
+                    moved += 10;
+                });
+            }
+
             colored
         }
         MatchOn::Word => {
@@ -452,8 +464,7 @@ fn check_string(
                         .and_then(|_| colored.write_all(word))
                         .and_then(|_| colored.write_all(b"\x1b[m "));
                 } else {
-                    let _ = colored.write_all(word);
-                    colored.push(b' ')
+                    let _ = colored.write_all(word).map(|_| colored.push(b' '));
                 }
             });
             if found {
@@ -484,18 +495,27 @@ fn check_regex(
     pattern: &Regex,
 ) -> bool {
     if color && !invert {
-        let mut line = line.to_vec();
-        let mut moved = 0;
-        let mut found = false;
-        let bytes = line.clone();
-        for loc in pattern.find_iter(&bytes) {
-            found = true;
-            line.insert_bytes(loc.end() + moved, b"\x1b[31;1m");
-            line.insert_bytes(loc.end() + 7 + moved, b"\x1b[m");
-            moved += 10;
-        }
-        if !found {
+        let indices: Vec<(usize, usize)> = pattern
+            .find_iter(line)
+            .map(|loc| (loc.start(), loc.end()))
+            .collect();
+        if indices.is_empty() {
             return false;
+        }
+
+        let mut line = {
+            let mut _line = Vec::with_capacity(line.len() + indices.len() * 10);
+            _line.extend_from_slice(line);
+            _line
+        };
+
+        let mut moved = 0;
+        unsafe {
+            indices.into_iter().for_each(|(start, end)| {
+                line.insert_bytes_unchecked(start + moved, b"\x1b[31;1m");
+                line.insert_bytes_unchecked(end + moved + 7, b"\x1b[m");
+                moved += 10;
+            });
         }
         print_match(writer, i, &line, show_lines, source, multiple_files);
         return true;
@@ -509,6 +529,11 @@ fn check_regex(
 
 pub trait InsertBytes {
     fn insert_bytes(&mut self, idx: usize, bytes: &[u8]);
+    /// # Safety
+    ///
+    /// This function requires the caller to uphold the safety contract where the Vec's capacity is
+    /// over the sum of its current length and the length of the bytes to be inserted.
+    unsafe fn insert_bytes_unchecked(&mut self, idx: usize, bytes: &[u8]);
 }
 
 impl InsertBytes for Vec<u8> {
@@ -516,6 +541,21 @@ impl InsertBytes for Vec<u8> {
         let len = self.len();
         let amt = bytes.len();
         self.reserve(amt);
+
+        unsafe {
+            std::ptr::copy(
+                self.as_ptr().add(idx),
+                self.as_mut_ptr().add(idx + amt),
+                len - idx,
+            );
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), self.as_mut_ptr().add(idx), amt);
+            self.set_len(len + amt);
+        }
+    }
+
+    unsafe fn insert_bytes_unchecked(&mut self, idx: usize, bytes: &[u8]) {
+        let len = self.len();
+        let amt = bytes.len();
 
         unsafe {
             std::ptr::copy(

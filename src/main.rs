@@ -97,9 +97,11 @@ impl Config {
         // Toggle string search if the query contains no special characters
         // This is done because string search is faster than regex search
         if flags & (1 << 3) == 0 {
-            let plain_text = regex::RegexBuilder::new(r"^[a-zA-Z0-9\s]").build().unwrap();
-            if plain_text.is_match(&query) {
-                flags |= 0b00001000;
+            let plain_text = regex::RegexBuilder::new("[^[:alnum:] ;:~!@#%&\\-_='\",<>/]")
+                .build()
+                .unwrap();
+            if !plain_text.is_match(&query) {
+                flags |= 1 << 3;
             }
         }
 
@@ -276,6 +278,7 @@ fn grep(cfg: Config) {
     } else {
         let re = RegexBuilder::new(&query)
             .case_insensitive(case_insensitive)
+            .multi_line(true)
             .build();
 
         if let Err(err) = &re {

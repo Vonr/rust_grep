@@ -141,19 +141,28 @@ fn walk(filenames: &mut Vec<String>, dir: &str) {
 }
 
 fn print_help() {
-    println!(concat!(
-        "Usage: grepox [OPTION]... QUERY [FILES]...\n",
-        "Search for QUERY in FILES.\n",
-        "Example:\n",
-        "    grepox -i 'hello world' file1.txt file2.txt\n\n",
-        "Options:\n",
-        "-i          Ignore case distinctions in QUERY\n",
-        "-n          Print line number with output lines\n",
-        "-v          Invert match: select non-matching lines\n",
-        "-F          String searching, disables regex\n",
-        "-x          Only match whole lines, only works with -F\n",
-        "-w          Only match whole words, only works with -F\n",
-        "-m=<NUM>    Stop after NUM matches\n",
+    macro_rules! concatln {
+        ($($line:literal)*, $last:literal) => {
+            concat!($($line, "\n"),*, $last)
+        };
+    }
+    println!(concatln!(
+        "Usage: grepox [OPTION]... QUERY [FILES]..."
+        "Search for QUERY in FILES."
+        "Example:"
+        "    # Finds the phrase 'hello world' case-insensitively in file1.txt"
+        "    # and file2.txt and prints matches in color"
+        "    grepox -ci 'hello world' file1.txt file2.txt"
+        ""
+        "Options:"
+        "-i          Ignore case distinctions in QUERY"
+        "-n          Print line number with output lines"
+        "-v          Invert match: select non-matching lines"
+        "-F          String searching, disables regex"
+        "-x          Only match whole lines, only works with -F"
+        "-w          Only match whole words, only works with -F"
+        "-m=<NUM>    Stop after NUM matches"
+        "-c          Colorizes output",
         "-h          Print this help and exit"
     ));
 }

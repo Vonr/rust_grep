@@ -96,7 +96,7 @@ impl Config {
 
         // Toggle string search if the query contains no special characters
         // This is done because string search is faster than regex search
-        if flags & 0b00001000 == 0 {
+        if flags & (1 << 3) == 0 {
             let plain_text = regex::RegexBuilder::new(r"^[a-zA-Z0-9\s]").build().unwrap();
             if plain_text.is_match(&query) {
                 flags |= 0b00001000;
@@ -173,11 +173,17 @@ fn grep(cfg: Config) {
     let has_max = max > 0;
 
     let flags = cfg.flags;
-    let case_insensitive = flags & 0b00000001 != 0;
-    let show_lines = flags & 0b00000010 != 0;
-    let invert = flags & 0b00000100 != 0;
-    let string_search = flags & 0b00001000 != 0;
-    let color = flags & 0b00010000 != 0;
+
+    macro_rules! flag {
+        ($pos:literal) => {
+            flags & (1 << $pos) != 0
+        };
+    }
+    let case_insensitive = flag!(0);
+    let show_lines = flag!(1);
+    let invert = flag!(2);
+    let string_search = flag!(3);
+    let color = flag!(4);
 
     let match_on = cfg.match_on;
 
@@ -314,7 +320,7 @@ fn grep(cfg: Config) {
                     line,
                     filename,
                     &re,
-                ) && max > 0
+                ) && has_max
                 {
                     matches += 1;
                     if matches >= max {
@@ -354,11 +360,12 @@ fn print_match(
 }
 
 fn read_file(filename: &str) -> LineReader<File> {
-    if let Ok(file) = File::open(filename) {
-        LineReader::new(file)
-    } else {
-        error!("Error reading {}", filename);
-    }
+    File::open(filename).map_or_else(
+        |_| {
+            error!("Error reading {}", filename);
+        },
+        LineReader::new,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]

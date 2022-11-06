@@ -1,4 +1,4 @@
-use linereader::LineReader;
+use bstr::io::BufReadExt;
 use mimalloc::MiMalloc;
 use naive_opt::SearchBytes;
 use regex::bytes::{Regex, RegexBuilder};
@@ -6,7 +6,7 @@ use std::{
     borrow::Cow,
     env::{self, Args},
     fs::{self, File},
-    io::{self, BufWriter, StdoutLock, Write},
+    io::{self, BufWriter, Read, StdoutLock, Write},
 };
 
 #[global_allocator]
@@ -253,10 +253,13 @@ fn grep(cfg: Config) {
         let writer = &mut writer;
         if !is_tty {
             let stdin = io::stdin();
-            let stdin = stdin.lock();
-            let mut reader = LineReader::new(stdin);
+            let mut stdin = stdin.lock();
             let mut i = 0;
-            while let Some(Ok(line)) = reader.next_line() {
+            let _ = stdin.for_byte_line_with_terminator(|line| {
+                if has_max && matches >= max {
+                    return Ok(false);
+                }
+
                 if check_string(
                     writer,
                     show_lines,
@@ -272,13 +275,11 @@ fn grep(cfg: Config) {
                 ) && has_max
                 {
                     matches += 1;
-                    if matches >= max {
-                        break;
-                    }
                 }
 
                 i += 1;
-            }
+                Ok(true)
+            });
             return;
         }
 
@@ -288,10 +289,14 @@ fn grep(cfg: Config) {
 
         for filename in &filenames {
             let mut matches: u32 = 0;
-            let reader = &mut read_file(filename);
-
+            let mut reader: &[u8] = &read_file(filename);
             let mut i = 0;
-            while let Some(Ok(line)) = reader.next_line() {
+
+            let _ = reader.for_byte_line_with_terminator(|line| {
+                if has_max && matches >= max {
+                    return Ok(false);
+                }
+
                 if check_string(
                     writer,
                     show_lines,
@@ -307,13 +312,11 @@ fn grep(cfg: Config) {
                 ) && has_max
                 {
                     matches += 1;
-                    if matches >= max {
-                        break;
-                    }
                 }
 
                 i += 1;
-            }
+                Ok(true)
+            });
         }
     } else {
         let writer = &mut writer;
@@ -329,10 +332,13 @@ fn grep(cfg: Config) {
 
         if !is_tty {
             let stdin = io::stdin();
-            let stdin = stdin.lock();
-            let mut reader = LineReader::new(stdin);
+            let mut stdin = stdin.lock();
             let mut i = 0;
-            while let Some(Ok(line)) = reader.next_line() {
+            let _ = stdin.for_byte_line_with_terminator(|line| {
+                if has_max && matches >= max {
+                    return Ok(false);
+                }
+
                 if check_regex(
                     writer,
                     show_lines,
@@ -346,13 +352,11 @@ fn grep(cfg: Config) {
                 ) && has_max
                 {
                     matches += 1;
-                    if matches >= max {
-                        break;
-                    }
                 }
 
                 i += 1;
-            }
+                Ok(true)
+            });
             return;
         }
 
@@ -362,10 +366,14 @@ fn grep(cfg: Config) {
 
         for filename in &filenames {
             let mut matches: u32 = 0;
-            let reader = &mut read_file(filename);
+            let mut reader: &[u8] = &read_file(filename);
 
             let mut i = 0;
-            while let Some(Ok(line)) = reader.next_line() {
+            let _ = reader.for_byte_line_with_terminator(|line| {
+                if has_max && matches >= max {
+                    return Ok(false);
+                }
+
                 if check_regex(
                     writer,
                     show_lines,
@@ -379,13 +387,11 @@ fn grep(cfg: Config) {
                 ) && has_max
                 {
                     matches += 1;
-                    if matches >= max {
-                        break;
-                    }
                 }
 
                 i += 1;
-            }
+                Ok(true)
+            });
         }
     }
     writer.flush().unwrap();
@@ -415,13 +421,19 @@ fn print_match(
     }
 }
 
-fn read_file(filename: &str) -> LineReader<File> {
-    File::open(filename).map_or_else(
-        |_| {
-            error!("Error reading {}", filename);
-        },
-        LineReader::new,
-    )
+fn read_file(filename: &str) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(
+        fs::metadata(filename)
+            .unwrap_or_else(|e| error!("Error reading file {}: {}", filename, e))
+            .len()
+            .try_into()
+            .unwrap_or_else(|_| error!("File {} is too large", filename)),
+    );
+    let _ = File::open(filename)
+        .unwrap_or_else(|e| error!("Error reading file {}: {}", filename, e))
+        .read_to_end(&mut buf)
+        .map_err(|e| error!("Error reading file {}: {}", filename, e));
+    buf
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -21,5 +21,5 @@ strip = "symbols"
 regex = "1.6.0"
 atty = "0.2.14"
 naive_opt = "0.1.18"
-linereader = "0.4.0"
+bstr = "1.0.1"
 mimalloc = { version = "0.1.30", default-features = false }

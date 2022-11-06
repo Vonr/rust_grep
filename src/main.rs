@@ -1,4 +1,4 @@
-use bstr::io::BufReadExt;
+use bstr::{io::BufReadExt, ByteSlice};
 use mimalloc::MiMalloc;
 use naive_opt::SearchBytes;
 use regex::bytes::{Regex, RegexBuilder};
@@ -7,6 +7,8 @@ use std::{
     env::{self, Args},
     fs::{self, File},
     io::{self, BufWriter, Read, StdoutLock, Write},
+    os::unix::prelude::OsStringExt,
+    path::Path,
 };
 
 #[global_allocator]
@@ -132,7 +134,7 @@ impl ConfigParser {
 
 struct Config {
     pub query: String,
-    pub filenames: Vec<String>,
+    pub filenames: Vec<Vec<u8>>,
     pub max: u32,
     pub flags: u8,
     pub match_on: MatchOn,
@@ -147,7 +149,7 @@ enum MatchOn {
 
 impl Config {
     fn new(args: Args) -> Self {
-        let mut filenames: Vec<String> = Vec::new();
+        let mut filenames: Vec<Vec<u8>> = Vec::new();
         let mut parser = ConfigParser::new();
 
         let mut args = args.skip(1).skip_while(|arg| parser.run(arg.as_bytes()));
@@ -158,7 +160,7 @@ impl Config {
         args.for_each(|arg| {
             if let Ok(md) = fs::metadata(&arg) {
                 if md.is_file() {
-                    filenames.push(arg);
+                    filenames.push(arg.into_bytes());
                 } else if md.is_dir() {
                     has_dir = true;
                     walk(&mut filenames, &arg);
@@ -188,25 +190,24 @@ impl Config {
     }
 }
 
-fn walk(filenames: &mut Vec<String>, dir: &str) {
+fn walk<P: AsRef<Path>>(filenames: &mut Vec<Vec<u8>>, dir: P) {
     if let Ok(files) = fs::read_dir(dir) {
         files.filter_map(|f| f.ok()).for_each(|f| {
-            if let Some(path) = f.path().to_str() {
-                let metadata = if let Ok(metadata) = f.metadata() {
-                    metadata
-                } else {
-                    return;
-                };
-                if metadata.is_file() {
-                    let path = path.to_owned();
-                    if !filenames.contains(&path) {
-                        filenames.push(path);
-                    }
-                }
+            let metadata = if let Ok(metadata) = f.metadata() {
+                metadata
+            } else {
+                return;
+            };
 
-                if metadata.is_dir() {
-                    walk(filenames, path);
+            if metadata.is_file() {
+                let path = f.path().into_os_string().into_vec();
+                if !filenames.contains(&path) {
+                    filenames.push(path);
                 }
+            }
+
+            if metadata.is_dir() {
+                walk(filenames, f.path());
             }
         });
     }
@@ -270,7 +271,7 @@ fn grep(cfg: Config) {
                     match_on,
                     i,
                     line,
-                    "stdin",
+                    b"stdin",
                     query,
                 ) && has_max
                 {
@@ -347,7 +348,7 @@ fn grep(cfg: Config) {
                     color,
                     i,
                     line,
-                    "stdin",
+                    b"stdin",
                     re,
                 ) && has_max
                 {
@@ -402,15 +403,17 @@ fn print_match(
     index: usize,
     line: &[u8],
     show_lines: bool,
-    filename: &str,
+    filename: &[u8],
     multiple_files: bool,
 ) {
     let res = if multiple_files {
-        if show_lines {
-            write!(writer, "{}:{}:", filename, index + 1)
-        } else {
-            write!(writer, "{}:", filename)
-        }
+        writer.write_all(filename).and_then(|_| {
+            if show_lines {
+                write!(writer, ":{}:", index + 1)
+            } else {
+                writer.write_all(b":")
+            }
+        })
     } else if show_lines {
         write!(writer, "{}:", index + 1)
     } else {
@@ -421,12 +424,16 @@ fn print_match(
     }
 }
 
-fn read_file(filename: &str) -> Vec<u8> {
+fn read_file(filename: &[u8]) -> Vec<u8> {
     let mut buf = Vec::new();
-    let _ = File::open(filename)
-        .unwrap_or_else(|e| error!("Error reading file {}: {}", filename, e))
-        .read_to_end(&mut buf)
-        .map_err(|e| error!("Error reading file {}: {}", filename, e));
+    let _ = File::open(
+        filename
+            .to_path()
+            .unwrap_or_else(|e| error!("Error reading file: {}", e)),
+    )
+    .unwrap_or_else(|e| error!("Error reading file: {}", e))
+    .read_to_end(&mut buf)
+    .map_err(|e| error!("Error reading file: {}", e));
     buf
 }
 
@@ -441,7 +448,7 @@ fn check_string(
     match_on: MatchOn,
     i: usize,
     line: &[u8],
-    source: &str,
+    source: &[u8],
     pattern: &[u8],
 ) -> bool {
     let line = if case_insensitive {
@@ -549,7 +556,7 @@ fn check_regex(
     color: bool,
     i: usize,
     line: &[u8],
-    source: &str,
+    source: &[u8],
     pattern: &Regex,
 ) -> bool {
     if color && !invert {

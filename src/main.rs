@@ -7,18 +7,127 @@ use std::{
     env::{self, Args},
     fs::{self, File},
     io::{self, BufWriter, StdoutLock, Write},
-    process::exit,
 };
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
+macro_rules! print_help {
+    () => {{
+        println!(
+            r"Usage: grepox [OPTION]... QUERY [FILES]...
+Search for QUERY in FILES.
+Example:
+    # Finds the phrase 'hello world' case-insensitively in file1.txt
+    # and file2.txt and prints matches in color
+    grepox -ci 'hello world' file1.txt file2.txt
+
+Options:
+-i          Ignore case distinctions in QUERY
+-n          Print line number with output lines
+-v          Invert match: select non-matching lines
+-F          String searching, disables regex
+-x          Only match whole lines, only works with -F
+-w          Only match whole words, only works with -F
+-m=<NUM>    Stop after NUM matches
+-c          Colorizes output
+-h          Print this help and exit"
+        );
+        ::std::process::exit(1)
+    }};
+}
+
 macro_rules! error {
-    ($format:literal$(, $args:expr)*) => {
+    ($format:literal$(, $args:expr)*) => {{
         eprintln!($format$(, $args)*);
-        print_help();
-        exit(1);
-    };
+        print_help!();
+    }};
+}
+
+enum ConfigState {
+    Flag,
+    End,
+    Invalid,
+    WantsMax,
+    Max(bool),
+    Space,
+}
+
+struct ConfigParser {
+    state: ConfigState,
+    flags: u8,
+    max: u32,
+    match_on: MatchOn,
+}
+
+impl ConfigParser {
+    pub const fn new() -> Self {
+        Self {
+            state: ConfigState::Space,
+            flags: 0,
+            max: 0,
+            match_on: MatchOn::Anywhere,
+        }
+    }
+
+    pub fn tick(&mut self, byte: u8) {
+        match self.state {
+            ConfigState::End => (),
+            ConfigState::Invalid => error!("Invalid state"),
+            ConfigState::Flag => match byte {
+                b'-' => self.state = ConfigState::End,
+                b'i' => self.flags |= 1 << 0,
+                b'n' => self.flags |= 1 << 1,
+                b'v' => self.flags |= 1 << 2,
+                b'F' => self.flags |= 1 << 3,
+                b'c' => self.flags |= 1 << 4,
+                b'w' => self.match_on = MatchOn::Word,
+                b'x' => self.match_on = MatchOn::Line,
+                b'm' => self.state = ConfigState::WantsMax,
+                b'h' => print_help!(),
+                b' ' => self.state = ConfigState::Space,
+                _ => self.state = ConfigState::Invalid,
+            },
+            ConfigState::WantsMax => match byte {
+                b'=' | b' ' => {
+                    self.state = ConfigState::Max(false);
+                    self.max = 0;
+                }
+                _ => self.state = ConfigState::Invalid,
+            },
+            ConfigState::Max(found) => match byte {
+                b'0'..=b'9' => {
+                    self.state = ConfigState::Max(true);
+                    self.max = self.max * 10 + (byte - b'0') as u32
+                }
+                b' ' => {
+                    if found {
+                        self.state = ConfigState::Space
+                    }
+                }
+                _ => self.state = ConfigState::Invalid,
+            },
+            ConfigState::Space => match byte {
+                b'-' => self.state = ConfigState::Flag,
+                b' ' => (),
+                _ => self.state = ConfigState::End,
+            },
+        }
+    }
+
+    pub fn run(&mut self, tape: &[u8]) -> bool {
+        for c in tape {
+            self.tick(*c);
+            if matches!(self.state, ConfigState::End) {
+                return false;
+            }
+        }
+        self.tick(b' ');
+        if matches!(self.state, ConfigState::End) {
+            return false;
+        }
+        true
+    }
 }
 
 struct Config {
@@ -38,143 +147,80 @@ enum MatchOn {
 
 impl Config {
     fn new(args: Args) -> Self {
-        let mut query = String::new();
         let mut filenames: Vec<String> = Vec::new();
-        let mut max = 0;
-        let mut flags: u8 = 0b00000000;
-        let mut match_on = MatchOn::Anywhere;
-        let mut finished = false;
+        let mut parser = ConfigParser::new();
 
-        for arg in args.skip(1) {
-            if !finished {
-                if arg == "--" {
-                    finished = true;
-                    continue;
-                } else if arg.starts_with('-') {
-                    let trimmed = arg.trim_start_matches('-');
-                    if let Some(stripped) = trimmed.strip_prefix("m=") {
-                        max = stripped.parse().unwrap_or(0);
-                        continue;
-                    }
-                    for c in trimmed.bytes() {
-                        match c {
-                            b'i' => flags |= 1 << 0,
-                            b'n' => flags |= 1 << 1,
-                            b'v' => flags |= 1 << 2,
-                            b'F' => flags |= 1 << 3,
-                            b'c' => flags |= 1 << 4,
-                            b'w' => match_on = MatchOn::Word,
-                            b'x' => match_on = MatchOn::Line,
-                            b'h' => {
-                                print_help();
-                                exit(0);
-                            }
-                            _ => {
-                                error!("Invalid flag: {}", c as char);
-                            }
-                        }
-                    }
-                    continue;
-                }
-            }
+        let mut args = args.skip(1).skip_while(|arg| parser.run(arg.as_bytes()));
 
-            if query.is_empty() {
-                query = arg;
-            } else if let Ok(md) = fs::metadata(&arg) {
+        let query = args.next().unwrap_or_else(|| error!("No query specified"));
+
+        let mut has_dir = false;
+        args.for_each(|arg| {
+            if let Ok(md) = fs::metadata(&arg) {
                 if md.is_file() {
                     filenames.push(arg);
                 } else if md.is_dir() {
+                    has_dir = true;
                     walk(&mut filenames, &arg);
                 }
             }
-            filenames.dedup();
-        }
-
-        if query.is_empty() {
-            error!("No query specified");
-        }
+        });
+        parser.flags |= (has_dir as u8) << 5;
 
         // Toggle string search if the query contains no special characters
         // This is done because string search is faster than regex search
-        if flags & (1 << 3) == 0 {
-            let plain_text = regex::RegexBuilder::new("[^[:alnum:] ;:~!@#%&\\-_='\",<>/]")
+        if parser.flags & (1 << 3) == 0 {
+            let plain_text = regex::RegexBuilder::new(r#"[^[:alnum:] ;:~!@#%&\-_='",<>/]"#)
                 .build()
                 .unwrap();
             if !plain_text.is_match(&query) {
-                flags |= 1 << 3;
+                parser.flags |= 1 << 3;
             }
         }
 
         Self {
             query,
             filenames,
-            max,
-            flags,
-            match_on,
+            max: parser.max,
+            flags: parser.flags,
+            match_on: parser.match_on,
         }
     }
 }
 
 fn walk(filenames: &mut Vec<String>, dir: &str) {
-    let mut files = if let Ok(files) = fs::read_dir(dir) {
-        files
-    } else {
-        return;
-    };
-    while let Some(Ok(f)) = files.next() {
-        let metadata = if let Ok(metadata) = f.metadata() {
-            metadata
-        } else {
-            continue;
-        };
+    if let Ok(files) = fs::read_dir(dir) {
+        files.filter_map(|f| f.ok()).for_each(|f| {
+            if let Some(path) = f.path().to_str() {
+                let metadata = if let Ok(metadata) = f.metadata() {
+                    metadata
+                } else {
+                    return;
+                };
+                if metadata.is_file() {
+                    let path = path.to_owned();
+                    if !filenames.contains(&path) {
+                        filenames.push(path);
+                    }
+                }
 
-        if let Some(path) = f.path().to_str() {
-            if metadata.is_file() {
-                filenames.push(path.to_owned());
-                continue;
+                if metadata.is_dir() {
+                    walk(filenames, path);
+                }
             }
-
-            if metadata.is_dir() {
-                walk(filenames, path);
-                continue;
-            }
-        }
+        });
     }
-}
-
-fn print_help() {
-    macro_rules! concatln {
-        ($($line:literal)*, $last:literal) => {
-            concat!($($line, "\n"),*, $last)
-        };
-    }
-    println!(concatln!(
-        "Usage: grepox [OPTION]... QUERY [FILES]..."
-        "Search for QUERY in FILES."
-        "Example:"
-        "    # Finds the phrase 'hello world' case-insensitively in file1.txt"
-        "    # and file2.txt and prints matches in color"
-        "    grepox -ci 'hello world' file1.txt file2.txt"
-        ""
-        "Options:"
-        "-i          Ignore case distinctions in QUERY"
-        "-n          Print line number with output lines"
-        "-v          Invert match: select non-matching lines"
-        "-F          String searching, disables regex"
-        "-x          Only match whole lines, only works with -F"
-        "-w          Only match whole words, only works with -F"
-        "-m=<NUM>    Stop after NUM matches"
-        "-c          Colorizes output",
-        "-h          Print this help and exit"
-    ));
-}
-
-fn main() {
-    grep(Config::new(env::args()));
 }
 
 fn grep(cfg: Config) {
-    let multiple_files = cfg.filenames.len() > 1;
+    let flags = cfg.flags;
+    macro_rules! flag {
+        ($pos:literal) => {{
+            flags & (1 << $pos) != 0
+        }};
+    }
+
+    let multiple_files = flag!(5) || cfg.filenames.len() > 1;
 
     let mut matches: u32 = 0;
 
@@ -183,13 +229,6 @@ fn grep(cfg: Config) {
     let max = cfg.max;
     let has_max = max > 0;
 
-    let flags = cfg.flags;
-
-    macro_rules! flag {
-        ($pos:literal) => {
-            flags & (1 << $pos) != 0
-        };
-    }
     let case_insensitive = flag!(0);
     let show_lines = flag!(1);
     let invert = flag!(2);
@@ -210,7 +249,8 @@ fn grep(cfg: Config) {
         } else {
             query
         };
-        let query = query.as_bytes();
+        let query = &query.into_bytes();
+        let writer = &mut writer;
         if !is_tty {
             let stdin = io::stdin();
             let stdin = stdin.lock();
@@ -218,7 +258,7 @@ fn grep(cfg: Config) {
             let mut i = 0;
             while let Some(Ok(line)) = reader.next_line() {
                 if check_string(
-                    &mut writer,
+                    writer,
                     show_lines,
                     multiple_files,
                     invert,
@@ -253,7 +293,7 @@ fn grep(cfg: Config) {
             let mut i = 0;
             while let Some(Ok(line)) = reader.next_line() {
                 if check_string(
-                    &mut writer,
+                    writer,
                     show_lines,
                     multiple_files,
                     invert,
@@ -276,16 +316,16 @@ fn grep(cfg: Config) {
             }
         }
     } else {
+        let writer = &mut writer;
         let re = RegexBuilder::new(&query)
             .case_insensitive(case_insensitive)
             .multi_line(true)
             .build();
 
-        if let Err(err) = &re {
-            error!("Error parsing regex: {}", err);
-        }
-
-        let re = re.unwrap();
+        let re = &match re {
+            Err(err) => error!("Error parsing regex: {}", err),
+            Ok(re) => re,
+        };
 
         if !is_tty {
             let stdin = io::stdin();
@@ -294,7 +334,7 @@ fn grep(cfg: Config) {
             let mut i = 0;
             while let Some(Ok(line)) = reader.next_line() {
                 if check_regex(
-                    &mut writer,
+                    writer,
                     show_lines,
                     multiple_files,
                     invert,
@@ -302,7 +342,7 @@ fn grep(cfg: Config) {
                     i,
                     line,
                     "stdin",
-                    &re,
+                    re,
                 ) && has_max
                 {
                     matches += 1;
@@ -327,7 +367,7 @@ fn grep(cfg: Config) {
             let mut i = 0;
             while let Some(Ok(line)) = reader.next_line() {
                 if check_regex(
-                    &mut writer,
+                    writer,
                     show_lines,
                     multiple_files,
                     invert,
@@ -335,7 +375,7 @@ fn grep(cfg: Config) {
                     i,
                     line,
                     filename,
-                    &re,
+                    re,
                 ) && has_max
                 {
                     matches += 1;
@@ -539,7 +579,7 @@ fn check_regex(
     false
 }
 
-pub trait InsertBytes {
+trait InsertBytes {
     fn insert_bytes(&mut self, idx: usize, bytes: &[u8]);
     /// # Safety
     ///
@@ -579,4 +619,8 @@ impl InsertBytes for Vec<u8> {
             self.set_len(len + amt);
         }
     }
+}
+
+fn main() {
+    grep(Config::new(env::args()));
 }

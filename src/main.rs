@@ -422,13 +422,7 @@ fn print_match(
 }
 
 fn read_file(filename: &str) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(
-        fs::metadata(filename)
-            .unwrap_or_else(|e| error!("Error reading file {}: {}", filename, e))
-            .len()
-            .try_into()
-            .unwrap_or_else(|_| error!("File {} is too large", filename)),
-    );
+    let mut buf = Vec::new();
     let _ = File::open(filename)
         .unwrap_or_else(|e| error!("Error reading file {}: {}", filename, e))
         .read_to_end(&mut buf)

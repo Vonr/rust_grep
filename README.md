@@ -27,6 +27,7 @@ Options:
 -F          String searching, disables regex
 -x          Only match whole lines, only works with -F
 -w          Only match whole words, only works with -F
+-U          No unicode, can speed up regular expressions
 -m=<NUM>    Stop after NUM matches
 -c          Colorizes output
 -h          Print this help and exit

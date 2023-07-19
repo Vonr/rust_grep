@@ -18,8 +18,11 @@ overflow-checks = false
 strip = "symbols"
 
 [dependencies]
-regex = "1.6.0"
+regex = "1.9.1"
+regex-automata = "0.3.3"
 atty = "0.2.14"
-naive_opt = "0.1.18"
-bstr = "1.0.1"
-mimalloc = { version = "0.1.30", default-features = false }
+bstr = "1.6.0"
+memchr = "2.5.0"
+
+[build-dependencies]
+regex-automata = "0.3.3"

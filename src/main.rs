@@ -1,19 +1,21 @@
+use crate::config::Config;
+use crate::trait_ext::*;
+
 use bstr::{io::BufReadExt, ByteSlice};
-use mimalloc::MiMalloc;
-use naive_opt::SearchBytes;
 use regex::bytes::{Regex, RegexBuilder};
 use std::{
     borrow::Cow,
-    env::{self, Args},
-    fs::{self, File},
+    fs,
     io::{self, BufWriter, Read, StdoutLock, Write},
-    os::unix::prelude::OsStringExt,
-    path::Path,
+    os::unix::prelude::OsStrExt,
+    path::{Path, PathBuf},
+    process::{exit, ExitCode},
 };
 
-#[global_allocator]
-static GLOBAL: MiMalloc = MiMalloc;
+mod config;
+mod trait_ext;
 
+#[macro_export]
 macro_rules! print_help {
     () => {{
         println!(
@@ -31,6 +33,9 @@ Options:
 -F          String searching, disables regex
 -x          Only match whole lines, only works with -F
 -w          Only match whole words, only works with -F
+-U          No unicode, can speed up regular expressions
+-q          Quiet, do not write to standard output.
+            Exits immediately with 0 if any match is found
 -m=<NUM>    Stop after NUM matches
 -c          Colorizes output
 -h          Print this help and exit"
@@ -39,105 +44,12 @@ Options:
     }};
 }
 
+#[macro_export]
 macro_rules! error {
     ($format:literal$(, $args:expr)*) => {{
         eprintln!($format$(, $args)*);
-        print_help!();
+        $crate::print_help!();
     }};
-}
-
-enum ConfigState {
-    Flag,
-    End,
-    Invalid,
-    WantsMax,
-    Max(bool),
-    Space,
-}
-
-struct ConfigParser {
-    state: ConfigState,
-    flags: u8,
-    max: u32,
-    match_on: MatchOn,
-}
-
-impl ConfigParser {
-    pub const fn new() -> Self {
-        Self {
-            state: ConfigState::Space,
-            flags: 0,
-            max: 0,
-            match_on: MatchOn::Anywhere,
-        }
-    }
-
-    pub fn tick(&mut self, byte: u8) {
-        match self.state {
-            ConfigState::End => (),
-            ConfigState::Invalid => error!("Invalid state"),
-            ConfigState::Flag => match byte {
-                b'-' => self.state = ConfigState::End,
-                b'i' => self.flags |= 1 << 0,
-                b'n' => self.flags |= 1 << 1,
-                b'v' => self.flags |= 1 << 2,
-                b'F' => self.flags |= 1 << 3,
-                b'c' => self.flags |= 1 << 4,
-                b'w' => self.match_on = MatchOn::Word,
-                b'x' => self.match_on = MatchOn::Line,
-                b'm' => self.state = ConfigState::WantsMax,
-                b'h' => print_help!(),
-                b' ' => self.state = ConfigState::Space,
-                _ => self.state = ConfigState::Invalid,
-            },
-            ConfigState::WantsMax => match byte {
-                b'=' | b' ' => {
-                    self.state = ConfigState::Max(false);
-                    self.max = 0;
-                }
-                _ => self.state = ConfigState::Invalid,
-            },
-            ConfigState::Max(found) => match byte {
-                b'0'..=b'9' => {
-                    self.state = ConfigState::Max(true);
-                    self.max = self.max * 10 + (byte - b'0') as u32
-                }
-                b' ' => {
-                    if found {
-                        self.state = ConfigState::Space
-                    }
-                }
-                _ => self.state = ConfigState::Invalid,
-            },
-            ConfigState::Space => match byte {
-                b'-' => self.state = ConfigState::Flag,
-                b' ' => (),
-                _ => self.state = ConfigState::End,
-            },
-        }
-    }
-
-    pub fn run(&mut self, tape: &[u8]) -> bool {
-        for c in tape {
-            self.tick(*c);
-            if matches!(self.state, ConfigState::End) {
-                return false;
-            }
-        }
-        self.tick(b' ');
-        if matches!(self.state, ConfigState::End) {
-            return false;
-        }
-        true
-    }
-}
-
-struct Config {
-    pub query: String,
-    pub filenames: Vec<Vec<u8>>,
-    pub max: u32,
-    pub flags: u8,
-    pub match_on: MatchOn,
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -147,95 +59,22 @@ enum MatchOn {
     Word,
 }
 
-impl Config {
-    fn new(args: Args) -> Self {
-        let mut filenames: Vec<Vec<u8>> = Vec::new();
-        let mut parser = ConfigParser::new();
+fn grep(cfg: Config) -> ExitCode {
+    let multiple_files = cfg.flag(7) || cfg.filenames.len() > 1;
 
-        let mut args = args.skip(1).skip_while(|arg| parser.run(arg.as_bytes()));
+    let case_insensitive = cfg.flag(0);
+    let show_lines = cfg.flag(1);
+    let invert = cfg.flag(2);
+    let string_search = cfg.flag(3);
+    let color = cfg.flag(4);
+    let no_unicode = !cfg.flag(5);
+    let quiet = cfg.flag(6);
 
-        let query = args.next().unwrap_or_else(|| error!("No query specified"));
-
-        let mut has_dir = false;
-        args.for_each(|arg| {
-            if let Ok(md) = fs::metadata(&arg) {
-                if md.is_file() {
-                    filenames.push(arg.into_bytes());
-                } else if md.is_dir() {
-                    has_dir = true;
-                    walk(&mut filenames, &arg);
-                }
-            }
-        });
-        parser.flags |= (has_dir as u8) << 5;
-
-        // Toggle string search if the query contains no special characters
-        // This is done because string search is faster than regex search
-        if parser.flags & (1 << 3) == 0 {
-            let plain_text = regex::RegexBuilder::new(r#"[^[:alnum:] ;:~!@#%&\-_='",<>/]"#)
-                .build()
-                .unwrap();
-            if !plain_text.is_match(&query) {
-                parser.flags |= 1 << 3;
-            }
-        }
-
-        Self {
-            query,
-            filenames,
-            max: parser.max,
-            flags: parser.flags,
-            match_on: parser.match_on,
-        }
-    }
-}
-
-fn walk<P: AsRef<Path>>(filenames: &mut Vec<Vec<u8>>, dir: P) {
-    if let Ok(files) = fs::read_dir(dir) {
-        files.filter_map(|f| f.ok()).for_each(|f| {
-            let metadata = if let Ok(metadata) = f.metadata() {
-                metadata
-            } else {
-                return;
-            };
-
-            if metadata.is_file() {
-                let path = f.path().into_os_string().into_vec();
-                if !filenames.contains(&path) {
-                    filenames.push(path);
-                }
-            }
-
-            if metadata.is_dir() {
-                walk(filenames, f.path());
-            }
-        });
-    }
-}
-
-fn grep(cfg: Config) {
-    let flags = cfg.flags;
-    macro_rules! flag {
-        ($pos:literal) => {{
-            flags & (1 << $pos) != 0
-        }};
-    }
-
-    let multiple_files = flag!(5) || cfg.filenames.len() > 1;
-
-    let mut matches: u32 = 0;
-
+    let mut total_matches: u32 = 0;
     let query = cfg.query;
-    let filenames = cfg.filenames;
     let max = cfg.max;
     let has_max = max > 0;
-
-    let case_insensitive = flag!(0);
-    let show_lines = flag!(1);
-    let invert = flag!(2);
-    let string_search = flag!(3);
-    let color = flag!(4);
-
+    let filenames = cfg.filenames;
     let match_on = cfg.match_on;
 
     let is_tty = atty::is(atty::Stream::Stdin);
@@ -243,6 +82,7 @@ fn grep(cfg: Config) {
     let stdout = std::io::stdout();
     let stdout = stdout.lock();
     let mut writer = BufWriter::with_capacity(16384, stdout);
+    let mut buf = Vec::new();
 
     if string_search {
         let query = if case_insensitive {
@@ -251,55 +91,61 @@ fn grep(cfg: Config) {
             query
         };
         let query = &query.into_bytes();
-        let writer = &mut writer;
         if !is_tty {
-            let stdin = io::stdin();
-            let mut stdin = stdin.lock();
             let mut i = 0;
-            let _ = stdin.for_byte_line_with_terminator(|line| {
-                if has_max && matches >= max {
-                    return Ok(false);
-                }
+            let filename = Path::new("stdin");
+            let _ = {
+                let stdin = io::stdin();
+                let mut stdin = stdin.lock();
+                stdin.for_byte_line_with_terminator(|line| {
+                    if has_max && total_matches >= max {
+                        return Ok(false);
+                    }
 
-                if check_string(
-                    writer,
-                    show_lines,
-                    multiple_files,
-                    invert,
-                    case_insensitive,
-                    color,
-                    match_on,
-                    i,
-                    line,
-                    b"stdin",
-                    query,
-                ) && has_max
-                {
-                    matches += 1;
-                }
+                    if check_string(
+                        &mut buf,
+                        &mut writer,
+                        quiet,
+                        show_lines,
+                        multiple_files,
+                        invert,
+                        case_insensitive,
+                        color,
+                        match_on,
+                        i,
+                        line,
+                        filename,
+                        query,
+                    ) {
+                        total_matches += 1;
+                    }
 
-                i += 1;
-                Ok(true)
-            });
-            return;
+                    i += 1;
+                    Ok(true)
+                })
+            };
+            return ExitCode::from_bool(total_matches > 0);
         }
 
         if filenames.is_empty() {
             error!("No files specified");
         }
 
+        let mut reader = Vec::new();
         for filename in &filenames {
             let mut matches: u32 = 0;
-            let mut reader: &[u8] = &read_file(filename);
+            read_file(&mut reader, filename);
             let mut i = 0;
 
-            let _ = reader.for_byte_line_with_terminator(|line| {
+            let _ = reader.as_slice().for_byte_line_with_terminator(|line| {
                 if has_max && matches >= max {
                     return Ok(false);
                 }
 
                 if check_string(
-                    writer,
+                    &mut buf,
+                    &mut writer,
+                    quiet,
                     show_lines,
                     multiple_files,
                     invert,
@@ -310,9 +156,9 @@ fn grep(cfg: Config) {
                     line,
                     filename,
                     query,
-                ) && has_max
-                {
+                ) {
                     matches += 1;
+                    total_matches += 1;
                 }
 
                 i += 1;
@@ -320,8 +166,8 @@ fn grep(cfg: Config) {
             });
         }
     } else {
-        let writer = &mut writer;
         let re = RegexBuilder::new(&query)
+            .unicode(no_unicode)
             .case_insensitive(case_insensitive)
             .multi_line(true)
             .build();
@@ -332,51 +178,58 @@ fn grep(cfg: Config) {
         };
 
         if !is_tty {
-            let stdin = io::stdin();
-            let mut stdin = stdin.lock();
             let mut i = 0;
-            let _ = stdin.for_byte_line_with_terminator(|line| {
-                if has_max && matches >= max {
-                    return Ok(false);
-                }
+            let filename = Path::new("stdin");
+            let _ = {
+                let stdin = io::stdin();
+                let mut stdin = stdin.lock();
+                stdin.for_byte_line_with_terminator(|line| {
+                    if has_max && total_matches >= max {
+                        return Ok(false);
+                    }
 
-                if check_regex(
-                    writer,
-                    show_lines,
-                    multiple_files,
-                    invert,
-                    color,
-                    i,
-                    line,
-                    b"stdin",
-                    re,
-                ) && has_max
-                {
-                    matches += 1;
-                }
+                    if check_regex(
+                        &mut buf,
+                        &mut writer,
+                        quiet,
+                        show_lines,
+                        multiple_files,
+                        invert,
+                        color,
+                        i,
+                        line,
+                        filename,
+                        re,
+                    ) {
+                        total_matches += 1;
+                    }
 
-                i += 1;
-                Ok(true)
-            });
-            return;
+                    i += 1;
+                    Ok(true)
+                })
+            };
+            return ExitCode::from_bool(total_matches > 0);
         }
 
         if filenames.is_empty() {
             error!("No files specified");
         }
 
+        let mut reader = Vec::new();
         for filename in &filenames {
             let mut matches: u32 = 0;
-            let mut reader: &[u8] = &read_file(filename);
-
+            read_file(&mut reader, filename);
             let mut i = 0;
-            let _ = reader.for_byte_line_with_terminator(|line| {
+
+            let _ = reader.as_slice().for_byte_line_with_terminator(|line| {
                 if has_max && matches >= max {
                     return Ok(false);
                 }
 
                 if check_regex(
-                    writer,
+                    &mut buf,
+                    &mut writer,
+                    quiet,
                     show_lines,
                     multiple_files,
                     invert,
@@ -385,9 +238,9 @@ fn grep(cfg: Config) {
                     line,
                     filename,
                     re,
-                ) && has_max
-                {
+                ) {
                     matches += 1;
+                    total_matches += 1;
                 }
 
                 i += 1;
@@ -396,6 +249,7 @@ fn grep(cfg: Config) {
         }
     }
     writer.flush().unwrap();
+    ExitCode::from_bool(total_matches > 0)
 }
 
 fn print_match(
@@ -403,17 +257,19 @@ fn print_match(
     index: usize,
     line: &[u8],
     show_lines: bool,
-    filename: &[u8],
+    filename: &Path,
     multiple_files: bool,
 ) {
     let res = if multiple_files {
-        writer.write_all(filename).and_then(|_| {
-            if show_lines {
-                write!(writer, ":{}:", index + 1)
-            } else {
-                writer.write_all(b":")
-            }
-        })
+        writer
+            .write_all(filename.as_os_str().as_bytes())
+            .and_then(|_| {
+                if show_lines {
+                    write!(writer, ":{}:", index + 1)
+                } else {
+                    writer.write_all(b":")
+                }
+            })
     } else if show_lines {
         write!(writer, "{}:", index + 1)
     } else {
@@ -424,22 +280,29 @@ fn print_match(
     }
 }
 
-fn read_file(filename: &[u8]) -> Vec<u8> {
-    let mut buf = Vec::new();
-    let _ = File::open(
-        filename
-            .to_path()
-            .unwrap_or_else(|e| error!("Error reading file: {}", e)),
-    )
-    .unwrap_or_else(|e| error!("Error reading file: {}", e))
-    .read_to_end(&mut buf)
-    .map_err(|e| error!("Error reading file: {}", e));
-    buf
+fn read_file(buf: &mut Vec<u8>, filename: &PathBuf) {
+    let mut file = fs::File::open(filename).unwrap_or_else(|e| error!("Error reading file: {}", e));
+
+    let needed = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let needed: usize = needed
+        .try_into()
+        .unwrap_or_else(|_| error!("File too big: {}", needed));
+
+    if buf.reserve_total(needed).is_err() {
+        error!("Could not allocate {needed} bytes");
+    }
+    buf.clear();
+
+    if let Err(e) = file.read_to_end(buf) {
+        error!("Error reading file: {}", e);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
 fn check_string(
+    buf: &mut Vec<u8>,
     writer: &mut BufWriter<StdoutLock>,
+    quiet: bool,
     show_lines: bool,
     multiple_files: bool,
     invert: bool,
@@ -448,7 +311,7 @@ fn check_string(
     match_on: MatchOn,
     i: usize,
     line: &[u8],
-    source: &[u8],
+    source: &Path,
     pattern: &[u8],
 ) -> bool {
     let line = if case_insensitive {
@@ -456,109 +319,107 @@ fn check_string(
     } else {
         Cow::Borrowed(line)
     };
-    if !color || invert || match_on == MatchOn::Line {
-        match match_on {
-            MatchOn::Anywhere => {
-                if !(&*line).includes_bytes(pattern) ^ invert {
-                    return false;
+
+    match (match_on, !color || invert) {
+        (_, true) | (MatchOn::Line, _) => {
+            match match_on {
+                MatchOn::Anywhere => {
+                    if !(&*line).contains_str(pattern) ^ invert {
+                        return false;
+                    }
+                }
+                MatchOn::Line => {
+                    if (line != pattern) ^ invert {
+                        return false;
+                    }
+                }
+                MatchOn::Word => {
+                    if line.words().all(|word| (word != pattern) ^ invert) {
+                        return false;
+                    }
                 }
             }
-            MatchOn::Line => {
-                if (line != pattern) ^ invert {
-                    return false;
-                }
+
+            if quiet {
+                exit(0);
             }
-            MatchOn::Word => {
-                if line
-                    .split(|c| match c {
-                        b' ' | b'\x09'..=b'\x0d' => true,
-                        c => *c > b'\x7f',
-                    })
-                    .all(|word| (word != pattern) ^ invert)
-                {
-                    return false;
-                }
-            }
+            print_match(writer, i, &line, show_lines, source, multiple_files);
+            return true;
         }
-
-        print_match(writer, i, &line, show_lines, source, multiple_files);
-        return true;
-    }
-
-    let line = match match_on {
-        MatchOn::Anywhere => {
-            let indices: Vec<usize> = (&*line)
-                .search_indices_bytes(pattern)
-                .map(|(start, _)| start)
-                .collect();
+        (MatchOn::Anywhere, _) => {
+            let line = &*line;
+            let indices = line.find_iter(pattern).collect::<Vec<_>>();
             if indices.is_empty() {
                 return false;
+            } else if quiet {
+                exit(0);
             }
 
-            let mut colored = {
-                let mut _colored = Vec::with_capacity(line.len() + indices.len() * 10);
-                _colored.extend_from_slice(&line);
-                _colored
-            };
-
-            let mut moved = 0;
+            let needed = line.len() + indices.len() * 10;
+            if buf.reserve_total(needed).is_err() {
+                error!("Could not allocate {needed} bytes");
+            }
+            buf.clear();
+            let mut last = 0;
             let len = pattern.len();
 
             unsafe {
-                indices.into_iter().for_each(|idx| {
-                    colored.insert_bytes_unchecked(idx + moved, b"\x1b[31;1m");
-                    colored.insert_bytes_unchecked(idx + moved + len + 7, b"\x1b[m");
-                    moved += 10;
-                });
+                for idx in indices.into_iter() {
+                    buf.extend_from_slice_unchecked(&line[last..idx]);
+                    buf.extend_from_slice_unchecked(b"\x1b[31;1m");
+                    buf.extend_from_slice_unchecked(pattern);
+                    buf.extend_from_slice_unchecked(b"\x1b[m");
+                    last = idx + len;
+                }
+                buf.extend_from_slice_unchecked(&line[last..]);
             }
 
-            colored
+            print_match(writer, i, buf, show_lines, source, multiple_files);
         }
-        MatchOn::Word => {
-            let mut colored = Vec::new();
+        (MatchOn::Word, _) => {
+            buf.clear();
             let mut found = false;
-            line.split(|c| match c {
-                b' ' | b'\x09'..=b'\x0d' => true,
-                c => *c > b'\x7f',
-            })
-            .for_each(|word| {
+            for word in line.words() {
                 if word == pattern {
+                    if quiet {
+                        exit(0);
+                    }
                     found = true;
-                    let _ = colored
+                    let _ = buf
                         .write_all(b"\x1b[31;1m")
-                        .and_then(|_| colored.write_all(word))
-                        .and_then(|_| colored.write_all(b"\x1b[m "));
+                        .and_then(|_| buf.write_all(word))
+                        .and_then(|_| buf.write_all(b"\x1b[m "));
                 } else {
-                    let _ = colored.write_all(word).map(|_| colored.push(b' '));
+                    let _ = buf.write_all(word).map(|_| buf.push(b' '));
                 }
-            });
-            if found {
-                colored.push(b'\n');
-                colored
-            } else {
+            }
+            if !found {
                 return false;
             }
-        }
-        MatchOn::Line => {
-            unreachable!()
+            buf.push(b'\n');
+            print_match(writer, i, buf, show_lines, source, multiple_files);
         }
     };
-    print_match(writer, i, &line, show_lines, source, multiple_files);
     true
 }
 
 #[allow(clippy::too_many_arguments)]
 fn check_regex(
+    buf: &mut Vec<u8>,
     writer: &mut BufWriter<StdoutLock>,
+    quiet: bool,
     show_lines: bool,
     multiple_files: bool,
     invert: bool,
     color: bool,
     i: usize,
     line: &[u8],
-    source: &[u8],
+    source: &Path,
     pattern: &Regex,
 ) -> bool {
+    if quiet && pattern.is_match(line) ^ invert {
+        exit(0);
+    }
     if color && !invert {
         let indices: Vec<(usize, usize)> = pattern
             .find_iter(line)
@@ -568,21 +429,26 @@ fn check_regex(
             return false;
         }
 
-        let mut line = {
-            let mut _line = Vec::with_capacity(line.len() + indices.len() * 10);
-            _line.extend_from_slice(line);
-            _line
-        };
-
-        let mut moved = 0;
-        unsafe {
-            indices.into_iter().for_each(|(start, end)| {
-                line.insert_bytes_unchecked(start + moved, b"\x1b[31;1m");
-                line.insert_bytes_unchecked(end + moved + 7, b"\x1b[m");
-                moved += 10;
-            });
+        let colored = buf;
+        let needed = line.len() + indices.len() * 10;
+        if colored.reserve_total(needed).is_err() {
+            error!("Could not allocate {needed} bytes");
         }
-        print_match(writer, i, &line, show_lines, source, multiple_files);
+        colored.clear();
+
+        let mut last = 0;
+        unsafe {
+            for (start, end) in indices.into_iter() {
+                colored.extend_from_slice_unchecked(&line[last..start]);
+                colored.extend_from_slice_unchecked(b"\x1b[31;1m");
+                colored.extend_from_slice_unchecked(&line[start..end]);
+                colored.extend_from_slice_unchecked(b"\x1b[m");
+                last = end
+            }
+            colored.extend_from_slice_unchecked(&line[last..]);
+        }
+
+        print_match(writer, i, colored, show_lines, source, multiple_files);
         return true;
     }
     if pattern.is_match(line) ^ invert {
@@ -592,48 +458,7 @@ fn check_regex(
     false
 }
 
-trait InsertBytes {
-    fn insert_bytes(&mut self, idx: usize, bytes: &[u8]);
-    /// # Safety
-    ///
-    /// This function requires the caller to uphold the safety contract where the Vec's capacity is
-    /// over the sum of its current length and the length of the bytes to be inserted.
-    unsafe fn insert_bytes_unchecked(&mut self, idx: usize, bytes: &[u8]);
-}
-
-impl InsertBytes for Vec<u8> {
-    fn insert_bytes(&mut self, idx: usize, bytes: &[u8]) {
-        let len = self.len();
-        let amt = bytes.len();
-        self.reserve(amt);
-
-        unsafe {
-            std::ptr::copy(
-                self.as_ptr().add(idx),
-                self.as_mut_ptr().add(idx + amt),
-                len - idx,
-            );
-            std::ptr::copy_nonoverlapping(bytes.as_ptr(), self.as_mut_ptr().add(idx), amt);
-            self.set_len(len + amt);
-        }
-    }
-
-    unsafe fn insert_bytes_unchecked(&mut self, idx: usize, bytes: &[u8]) {
-        let len = self.len();
-        let amt = bytes.len();
-
-        unsafe {
-            std::ptr::copy(
-                self.as_ptr().add(idx),
-                self.as_mut_ptr().add(idx + amt),
-                len - idx,
-            );
-            std::ptr::copy_nonoverlapping(bytes.as_ptr(), self.as_mut_ptr().add(idx), amt);
-            self.set_len(len + amt);
-        }
-    }
-}
-
-fn main() {
-    grep(Config::new(env::args()));
+fn main() -> ExitCode {
+    let config = Config::new();
+    grep(config)
 }

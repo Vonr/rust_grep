@@ -8,6 +8,7 @@ homepage = "https://github.com/Vonr/grepox"
 repository = "https://github.com/Vonr/grepox"
 keywords = ["grep", "search", "cli", "fast", "minimal"]
 edition = "2021"
+rust-version = "1.70.0"
 
 [profile.release]
 lto = "fat"
@@ -20,9 +21,7 @@ strip = "symbols"
 [dependencies]
 regex = "1.9.1"
 regex-automata = "0.3.3"
-atty = "0.2.14"
 bstr = "1.6.0"
-memchr = "2.5.0"
 
 [build-dependencies]
 regex-automata = "0.3.3"

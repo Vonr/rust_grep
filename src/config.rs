@@ -1,6 +1,6 @@
 use regex_automata::dfa::{dense, Automaton};
 
-use crate::{error, print_help, trait_ext::Bitflag, MatchOn};
+use crate::{error, print_help, MatchOn};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -38,17 +38,17 @@ enum ConfigState {
 
 pub struct ConfigParser {
     state: ConfigState,
-    flags: u8,
+    flags: Flags,
     max: u32,
     match_on: MatchOn,
 }
 
 impl ConfigParser {
     #[inline]
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             state: ConfigState::Space,
-            flags: 0,
+            flags: Flags::default(),
             max: 0,
             match_on: MatchOn::Anywhere,
         }
@@ -61,13 +61,13 @@ impl ConfigParser {
             ConfigState::Invalid => error!("Invalid state"),
             ConfigState::Flag => match byte {
                 b'-' => self.state = ConfigState::End,
-                b'i' => self.set_flag(0),
-                b'n' => self.set_flag(1),
-                b'v' => self.set_flag(2),
-                b'F' => self.set_flag(3),
-                b'c' => self.set_flag(4),
-                b'U' => self.set_flag(5),
-                b'q' => self.set_flag(6),
+                b'i' => self.flags.case_insensitive = true,
+                b'n' => self.flags.show_lines = true,
+                b'v' => self.flags.invert = true,
+                b'F' => self.flags.string_search = true,
+                b'c' => self.flags.color = true,
+                b'U' => self.flags.no_unicode = true,
+                b'q' => self.flags.quiet = true,
                 b'w' => self.match_on = MatchOn::Word,
                 b'x' => self.match_on = MatchOn::Line,
                 b'm' => self.state = ConfigState::WantsMax,
@@ -113,30 +113,31 @@ impl ConfigParser {
         self.tick(b' ');
         true
     }
-
-    #[inline]
-    fn flag(&self, pos: u8) -> bool {
-        self.flags.bit(pos)
-    }
-
-    #[inline]
-    fn set_flag(&mut self, pos: u8) {
-        self.flags.set_bit(pos)
-    }
 }
 
-pub type FlagType = u8;
+#[derive(Default)]
+#[repr(align(8))]
+pub struct Flags {
+    pub case_insensitive: bool,
+    pub show_lines: bool,
+    pub invert: bool,
+    pub string_search: bool,
+    pub color: bool,
+    pub no_unicode: bool,
+    pub quiet: bool,
+    pub multiple_files: bool,
+}
 
 pub struct Config {
     pub query: String,
     pub filenames: Vec<PathBuf>,
     pub max: u32,
-    flags: FlagType,
+    pub flags: Flags,
     pub(crate) match_on: MatchOn,
 }
 
 impl Config {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         let mut filenames = Vec::new();
         let mut parser = ConfigParser::new();
 
@@ -158,18 +159,18 @@ impl Config {
             }
         }
 
-        parser.flags |= (has_dir as u8) << 7;
+        parser.flags.multiple_files |= has_dir;
 
         // Toggle string search if the query contains no special characters
         // This is done because string search is faster than regex search
-        if !parser.flag(3) {
+        if !parser.flags.string_search {
             let plain_text = DFA::from_bytes(&ALIGNED.bytes).unwrap().0;
             if plain_text
                 .try_search_fwd(&query.as_bytes().into())
                 .map(|m| m.is_none())
                 .unwrap_or(false)
             {
-                parser.set_flag(3);
+                parser.flags.string_search = true;
             }
         }
 
@@ -180,11 +181,6 @@ impl Config {
             flags: parser.flags,
             match_on: parser.match_on,
         }
-    }
-
-    #[inline]
-    pub(crate) fn flag(&self, pos: u8) -> bool {
-        self.flags.bit(pos)
     }
 }
 

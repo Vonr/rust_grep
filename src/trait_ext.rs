@@ -1,7 +1,5 @@
 use std::{ops::Deref, process::ExitCode, slice::Split};
 
-use crate::config::FlagType;
-
 pub trait ExtendFromSliceUnchecked<T> {
     /// # Safety
     ///
@@ -66,25 +64,6 @@ pub trait Bitflag {
     fn bit(&self, pos: Self::Index) -> bool;
     fn set_bit(&mut self, pos: Self::Index);
     fn unset_bit(&mut self, pos: Self::Index);
-}
-
-impl Bitflag for FlagType {
-    type Index = Self;
-
-    #[inline]
-    fn bit(&self, pos: Self::Index) -> bool {
-        self & (1 << pos) != 0
-    }
-
-    #[inline]
-    fn set_bit(&mut self, pos: Self::Index) {
-        *self |= 1 << pos;
-    }
-
-    #[inline]
-    fn unset_bit(&mut self, pos: Self::Index) {
-        *self &= !(1 << pos);
-    }
 }
 
 pub struct CapacityOverflow;

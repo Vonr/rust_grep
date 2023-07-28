@@ -2,11 +2,12 @@ use crate::config::Config;
 use crate::trait_ext::*;
 
 use bstr::{io::BufReadExt, ByteSlice};
+use config::Flags;
 use regex::bytes::{Regex, RegexBuilder};
 use std::{
     borrow::Cow,
     fs,
-    io::{self, BufWriter, Read, StdoutLock, Write},
+    io::{self, BufWriter, IsTerminal, Read, StdoutLock, Write},
     os::unix::prelude::OsStrExt,
     path::{Path, PathBuf},
     process::{exit, ExitCode},
@@ -60,15 +61,17 @@ enum MatchOn {
 }
 
 fn grep(cfg: Config) -> ExitCode {
-    let multiple_files = cfg.flag(7) || cfg.filenames.len() > 1;
-
-    let case_insensitive = cfg.flag(0);
-    let show_lines = cfg.flag(1);
-    let invert = cfg.flag(2);
-    let string_search = cfg.flag(3);
-    let color = cfg.flag(4);
-    let no_unicode = !cfg.flag(5);
-    let quiet = cfg.flag(6);
+    let Flags {
+        multiple_files,
+        case_insensitive,
+        show_lines,
+        invert,
+        string_search,
+        color,
+        no_unicode,
+        quiet,
+    } = cfg.flags;
+    let multiple_files = multiple_files || cfg.filenames.len() > 1;
 
     let mut total_matches: u32 = 0;
     let query = cfg.query;
@@ -77,10 +80,9 @@ fn grep(cfg: Config) -> ExitCode {
     let filenames = cfg.filenames;
     let match_on = cfg.match_on;
 
-    let is_tty = atty::is(atty::Stream::Stdin);
-
     let stdout = std::io::stdout();
     let stdout = stdout.lock();
+    let is_tty = std::io::stdin().is_terminal();
     let mut writer = BufWriter::with_capacity(16384, stdout);
     let mut buf = Vec::new();
 
@@ -167,7 +169,7 @@ fn grep(cfg: Config) -> ExitCode {
         }
     } else {
         let re = RegexBuilder::new(&query)
-            .unicode(no_unicode)
+            .unicode(!no_unicode)
             .case_insensitive(case_insensitive)
             .multi_line(true)
             .build();
@@ -324,7 +326,7 @@ fn check_string(
         (_, true) | (MatchOn::Line, _) => {
             match match_on {
                 MatchOn::Anywhere => {
-                    if !(&*line).contains_str(pattern) ^ invert {
+                    if !line.contains_str(pattern) ^ invert {
                         return false;
                     }
                 }

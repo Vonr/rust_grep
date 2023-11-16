@@ -1,10 +1,8 @@
 use regex_automata::dfa::{dense, Automaton};
+use walkdir::WalkDir;
 
 use crate::{error, print_help, MatchOn};
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::{fs, path::PathBuf};
 
 #[allow(clippy::upper_case_acronyms)]
 type DFA = dense::DFA<&'static [S]>;
@@ -68,6 +66,7 @@ impl ConfigParser {
                 b'c' => self.flags.color = true,
                 b'U' => self.flags.no_unicode = true,
                 b'q' => self.flags.quiet = true,
+                b'l' => self.flags.list = true,
                 b'w' => self.match_on = MatchOn::Word,
                 b'x' => self.match_on = MatchOn::Line,
                 b'm' => self.state = ConfigState::WantsMax,
@@ -115,7 +114,7 @@ impl ConfigParser {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 #[repr(align(8))]
 pub struct Flags {
     pub case_insensitive: bool,
@@ -126,6 +125,7 @@ pub struct Flags {
     pub no_unicode: bool,
     pub quiet: bool,
     pub multiple_files: bool,
+    pub list: bool,
 }
 
 pub struct Config {
@@ -154,7 +154,11 @@ impl Config {
                     filenames.push(arg.into());
                 } else if md.is_dir() {
                     has_dir = true;
-                    walk(&mut filenames, &arg);
+                    for entry in WalkDir::new(arg).into_iter().filter_map(Result::ok) {
+                        if entry.file_type().is_file() {
+                            filenames.push(entry.into_path());
+                        }
+                    }
                 }
             }
         }
@@ -181,26 +185,5 @@ impl Config {
             flags: parser.flags,
             match_on: parser.match_on,
         }
-    }
-}
-
-fn walk<P: AsRef<Path>>(filenames: &mut Vec<PathBuf>, dir: P) {
-    if let Ok(files) = fs::read_dir(dir) {
-        files.filter_map(Result::ok).for_each(|f| {
-            let file_type = if let Ok(file_type) = f.file_type() {
-                file_type
-            } else {
-                return;
-            };
-
-            if file_type.is_file() {
-                let path = f.path();
-                if !filenames.contains(&path) {
-                    filenames.push(path);
-                }
-            } else if file_type.is_dir() {
-                walk(filenames, f.path());
-            }
-        });
     }
 }

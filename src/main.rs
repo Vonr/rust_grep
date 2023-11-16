@@ -61,17 +61,14 @@ enum MatchOn {
 }
 
 fn grep(cfg: Config) -> ExitCode {
-    let Flags {
-        multiple_files,
+    let mut flags @ Flags {
         case_insensitive,
-        show_lines,
-        invert,
         string_search,
-        color,
         no_unicode,
-        quiet,
+        list,
+        ..
     } = cfg.flags;
-    let multiple_files = multiple_files || cfg.filenames.len() > 1;
+    flags.multiple_files = flags.multiple_files || cfg.filenames.len() > 1;
 
     let mut total_matches: u32 = 0;
     let query = cfg.query;
@@ -107,18 +104,19 @@ fn grep(cfg: Config) -> ExitCode {
                     if check_string(
                         &mut buf,
                         &mut writer,
-                        quiet,
-                        show_lines,
-                        multiple_files,
-                        invert,
-                        case_insensitive,
-                        color,
+                        flags,
                         match_on,
                         i,
                         line,
                         filename,
                         query,
                     ) {
+                        if list {
+                            if let Err(e) = writer.write_all(b"stdin\n") {
+                                error!("Could not write filename: {e}")
+                            }
+                            return Ok(false);
+                        }
                         total_matches += 1;
                     }
 
@@ -147,18 +145,22 @@ fn grep(cfg: Config) -> ExitCode {
                 if check_string(
                     &mut buf,
                     &mut writer,
-                    quiet,
-                    show_lines,
-                    multiple_files,
-                    invert,
-                    case_insensitive,
-                    color,
+                    flags,
                     match_on,
                     i,
                     line,
                     filename,
                     query,
                 ) {
+                    if list {
+                        if let Err(e) = writer
+                            .write_all(filename.as_os_str().as_bytes())
+                            .and_then(|_| writer.write_all(b"\n"))
+                        {
+                            error!("Could not write filename: {e}")
+                        }
+                        return Ok(false);
+                    }
                     matches += 1;
                     total_matches += 1;
                 }
@@ -190,19 +192,13 @@ fn grep(cfg: Config) -> ExitCode {
                         return Ok(false);
                     }
 
-                    if check_regex(
-                        &mut buf,
-                        &mut writer,
-                        quiet,
-                        show_lines,
-                        multiple_files,
-                        invert,
-                        color,
-                        i,
-                        line,
-                        filename,
-                        re,
-                    ) {
+                    if check_regex(&mut buf, &mut writer, flags, i, line, filename, re) {
+                        if list {
+                            if let Err(e) = writer.write_all(b"stdin\n") {
+                                error!("Could not write filename: {e}")
+                            }
+                            return Ok(false);
+                        }
                         total_matches += 1;
                     }
 
@@ -228,19 +224,16 @@ fn grep(cfg: Config) -> ExitCode {
                     return Ok(false);
                 }
 
-                if check_regex(
-                    &mut buf,
-                    &mut writer,
-                    quiet,
-                    show_lines,
-                    multiple_files,
-                    invert,
-                    color,
-                    i,
-                    line,
-                    filename,
-                    re,
-                ) {
+                if check_regex(&mut buf, &mut writer, flags, i, line, filename, re) {
+                    if list {
+                        if let Err(e) = writer
+                            .write_all(filename.as_os_str().as_bytes())
+                            .and_then(|_| writer.write_all(b"\n"))
+                        {
+                            error!("Could not write filename: {e}")
+                        }
+                        return Ok(false);
+                    }
                     matches += 1;
                     total_matches += 1;
                 }
@@ -283,17 +276,20 @@ fn print_match(
 }
 
 fn read_file(buf: &mut Vec<u8>, filename: &PathBuf) {
-    let mut file = fs::File::open(filename).unwrap_or_else(|e| error!("Error reading file: {}", e));
+    let mut file = fs::File::options()
+        .read(true)
+        .open(filename)
+        .unwrap_or_else(|e| error!("Error reading file: {}", e));
 
     let needed = file.metadata().map(|m| m.len()).unwrap_or(0);
     let needed: usize = needed
         .try_into()
         .unwrap_or_else(|_| error!("File too big: {}", needed));
 
+    buf.clear();
     if buf.reserve_total(needed).is_err() {
         error!("Could not allocate {needed} bytes");
     }
-    buf.clear();
 
     if let Err(e) = file.read_to_end(buf) {
         error!("Error reading file: {}", e);
@@ -304,48 +300,52 @@ fn read_file(buf: &mut Vec<u8>, filename: &PathBuf) {
 fn check_string(
     buf: &mut Vec<u8>,
     writer: &mut BufWriter<StdoutLock>,
-    quiet: bool,
-    show_lines: bool,
-    multiple_files: bool,
-    invert: bool,
-    case_insensitive: bool,
-    color: bool,
+    flags: Flags,
     match_on: MatchOn,
     i: usize,
     line: &[u8],
     source: &Path,
     pattern: &[u8],
 ) -> bool {
-    let line = if case_insensitive {
+    let line = if flags.case_insensitive {
         Cow::Owned(line.to_ascii_lowercase())
     } else {
         Cow::Borrowed(line)
     };
 
-    match (match_on, !color || invert) {
+    match (match_on, !flags.color || flags.invert) {
         (_, true) | (MatchOn::Line, _) => {
             match match_on {
                 MatchOn::Anywhere => {
-                    if !line.contains_str(pattern) ^ invert {
+                    if !line.contains_str(pattern) ^ flags.invert {
                         return false;
                     }
                 }
                 MatchOn::Line => {
-                    if (line != pattern) ^ invert {
+                    if (line != pattern) ^ flags.invert {
                         return false;
                     }
                 }
                 MatchOn::Word => {
-                    if line.words().all(|word| (word != pattern) ^ invert) {
+                    if line.words().all(|word| (word != pattern) ^ flags.invert) {
                         return false;
                     }
                 }
             }
 
-            if quiet {
+            if flags.quiet {
                 exit(0);
             }
-            print_match(writer, i, &line, show_lines, source, multiple_files);
+            if !flags.list {
+                print_match(
+                    writer,
+                    i,
+                    &line,
+                    flags.show_lines,
+                    source,
+                    flags.multiple_files,
+                );
+            }
             return true;
         }
         (MatchOn::Anywhere, _) => {
@@ -353,8 +353,13 @@ fn check_string(
             let indices = line.find_iter(pattern).collect::<Vec<_>>();
             if indices.is_empty() {
                 return false;
-            } else if quiet {
-                exit(0);
+            } else {
+                if flags.quiet {
+                    exit(0);
+                }
+                if flags.list {
+                    return true;
+                }
             }
 
             let needed = line.len() + indices.len() * 10;
@@ -376,15 +381,25 @@ fn check_string(
                 buf.extend_from_slice_unchecked(&line[last..]);
             }
 
-            print_match(writer, i, buf, show_lines, source, multiple_files);
+            print_match(
+                writer,
+                i,
+                buf,
+                flags.show_lines,
+                source,
+                flags.multiple_files,
+            );
         }
         (MatchOn::Word, _) => {
             buf.clear();
             let mut found = false;
             for word in line.words() {
                 if word == pattern {
-                    if quiet {
+                    if flags.quiet {
                         exit(0);
+                    }
+                    if flags.list {
+                        return true;
                     }
                     found = true;
                     let _ = buf
@@ -399,7 +414,14 @@ fn check_string(
                 return false;
             }
             buf.push(b'\n');
-            print_match(writer, i, buf, show_lines, source, multiple_files);
+            print_match(
+                writer,
+                i,
+                buf,
+                flags.show_lines,
+                source,
+                flags.multiple_files,
+            );
         }
     };
     true
@@ -409,20 +431,21 @@ fn check_string(
 fn check_regex(
     buf: &mut Vec<u8>,
     writer: &mut BufWriter<StdoutLock>,
-    quiet: bool,
-    show_lines: bool,
-    multiple_files: bool,
-    invert: bool,
-    color: bool,
+    flags: Flags,
     i: usize,
     line: &[u8],
     source: &Path,
     pattern: &Regex,
 ) -> bool {
-    if quiet && pattern.is_match(line) ^ invert {
-        exit(0);
+    if pattern.is_match(line) ^ flags.invert {
+        if flags.quiet {
+            exit(0);
+        }
+        if flags.list {
+            return true;
+        }
     }
-    if color && !invert {
+    if flags.color && !flags.invert {
         let indices: Vec<(usize, usize)> = pattern
             .find_iter(line)
             .map(|loc| (loc.start(), loc.end()))
@@ -450,11 +473,25 @@ fn check_regex(
             colored.extend_from_slice_unchecked(&line[last..]);
         }
 
-        print_match(writer, i, colored, show_lines, source, multiple_files);
+        print_match(
+            writer,
+            i,
+            colored,
+            flags.show_lines,
+            source,
+            flags.multiple_files,
+        );
         return true;
     }
-    if pattern.is_match(line) ^ invert {
-        print_match(writer, i, line, show_lines, source, multiple_files);
+    if pattern.is_match(line) ^ flags.invert {
+        print_match(
+            writer,
+            i,
+            line,
+            flags.show_lines,
+            source,
+            flags.multiple_files,
+        );
         return true;
     }
     false

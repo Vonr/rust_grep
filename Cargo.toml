@@ -1,6 +1,6 @@
 [package]
 name = "grepox"
-version = "0.2.21"
+version = "0.2.22"
 description = "Minimalist's grep written in Rust."
 license = "Unlicense"
 readme = "README.md"
@@ -20,8 +20,9 @@ strip = "symbols"
 
 [dependencies]
 regex = "1.9.1"
-regex-automata = "0.3.3"
+regex-automata = "0.4.3"
 bstr = "1.6.0"
+walkdir = "2.4.0"
 
 [build-dependencies]
-regex-automata = "0.3.3"
+regex-automata = "0.4.3"

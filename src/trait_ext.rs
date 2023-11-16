@@ -74,12 +74,10 @@ pub trait ReserveTotal {
 
 impl<T> ReserveTotal for Vec<T> {
     fn reserve_total(&mut self, total: usize) -> Result<(), CapacityOverflow> {
-        if total.checked_mul(std::mem::size_of::<T>()).is_none() {
-            return Err(CapacityOverflow);
-        }
-        let capacity = self.capacity();
-        if total > capacity {
-            self.reserve(total - capacity);
+        if total > self.len() {
+            return self
+                .try_reserve_exact(total - self.len())
+                .map_err(|_| CapacityOverflow);
         }
         Ok(())
     }
